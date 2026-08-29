@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # CORS 默认关闭；仅当显式配置白名单时开启
     cors_origins: list[str] = []
 
+    # P4 前端（FastAPI 同源托管静态资源）
+    frontend_dir: str = "./frontend"
+
     # P1 采集（parse）
     crawler_delay_seconds: float = 10.0
     crawler_timeout_seconds: float = 10.0

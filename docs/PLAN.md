@@ -2,7 +2,7 @@
 
 > 基于已有食材的菜谱推荐系统。本文档固化当前架构决策、流程图、兜底策略、测试门禁与 P0 实施计划，作为后续实现与扩展的唯一依据。
 
-**阶段状态：P0 已完成（2026-08-28 验收通过）→ P1 已完成（parse + ingest + 真实嵌入验收，2026-08-29 验收通过；实施计划与验收结果见 [docs/P1_PLAN.md](P1_PLAN.md)）→ P2 检索层已完成（BM25 + 向量 + RRF + 缺料/评分 + search API + LangGraph 节点 + 食材向量库，2026-08-29 验收通过；实施计划与验收结果见 [docs/P2_PLAN.md](P2_PLAN.md)）→ P3 LangGraph 工作流已完成（LLM 识别 + 四级映射 + 检索排序 + 推荐生成 + recommend API，2026-08-29 验收通过；实施计划与验收结果见 [docs/P3_PLAN.md](P3_PLAN.md)）。**
+**阶段状态：P0 已完成（2026-08-28 验收通过）→ P1 已完成（parse + ingest + 真实嵌入验收，2026-08-29 验收通过；实施计划与验收结果见 [docs/P1_PLAN.md](P1_PLAN.md)）→ P2 检索层已完成（BM25 + 向量 + RRF + 缺料/评分 + search API + LangGraph 节点 + 食材向量库，2026-08-29 验收通过；实施计划与验收结果见 [docs/P2_PLAN.md](P2_PLAN.md)）→ P3 LangGraph 工作流已完成（LLM 识别 + 四级映射 + 检索排序 + 推荐生成 + recommend API，2026-08-29 验收通过；实施计划与验收结果见 [docs/P3_PLAN.md](P3_PLAN.md)）→ P4 前端已完成（原生 HTML/CSS/JS + 推荐/搜索页 + 任务级幂等重试 + Playwright 冒烟，2026-08-29 验收通过；实施计划与验收结果见 [docs/P4_PLAN.md](P4_PLAN.md)）。**
 
 ## 1. 项目概述
 
@@ -147,6 +147,7 @@ flowchart LR
 | MySQL 不可用 | 返回友好错误 + 错误日志告警；查询全部参数化防注入 | 连接池异常 |
 | 采集单条 / 单站失败 | 重试 3 次（指数退避）→ 跳过记录，断点续采；URL 唯一索引幂等 | 网络错误 / 解析异常 |
 | 用户输入为空 / 无效 | 前端校验 + API 400 友好提示，不进入 LangGraph | 请求校验失败 |
+| 前端请求超时 / 用户重试 | 按任务类型 abort 在途请求后重新提交（幂等中断），不产生重复请求；主动中断不误报 | 5s 超时 / 主动重试 / 切换详情 |
 | 死循环防护 | 所有重试均有计数上限（识别 ≤ 1 次、采集 ≤ 3 次） | 状态机层强制约束 |
 
 ## 5. 接口与数据模型
@@ -192,7 +193,7 @@ flowchart LR
 - **P1 采集管线**：首个 Crawler 适配器 + 清洗 + 断点续采 + MySQL/Chroma 双写 + 嵌入 + OpenAI 兼容 LLM/嵌入实现（**修订：两阶段管线 + JSON 中间产物 + 食材/调料分流 + 语义分块**）。**✅ 已完成（2026-08-29），实施计划与验收结果见 [docs/P1_PLAN.md](P1_PLAN.md)。**
 - **P2 检索层**：`HybridRetriever`（BM25 + 向量）+ 默认 `ScoringStrategy`，验证召回质量与耗时基线。**✅ 已完成（2026-08-29），实施计划与验收结果见 [docs/P2_PLAN.md](P2_PLAN.md)。**
 - **P3 LangGraph 工作流**：LLM 识别节点（复用 `OpenAICompatibleLLM`）+ 完整图 + 兜底分支 + 结构化生成 + 推荐 API。**✅ 已完成（2026-08-29），实施计划与验收结果见 [docs/P3_PLAN.md](P3_PLAN.md)。**
-- **P4 前端**：Web 输入页、推荐卡片、忌口选择、降级提示展示。
+- **P4 前端**：FastAPI 同源托管原生前端——推荐主页 `/`（食材输入 + 联想、忌口选择、推荐卡片、降级提示展示）、独立搜索页 `/search.html`（复用 P2 search API + 详情抽屉）、任务级 AbortController 幂等重试（默认 5s 超时 / recommend 30s，`recommend.js: {tags, autocomplete, recommend}` / `search.js: {tags, autocomplete, search, detail}`）、6 条 Playwright 冒烟脚本。**✅ 已完成（2026-08-29），191 测试全绿 + 6 条冒烟通过，实施计划与验收结果见 [docs/P4_PLAN.md](P4_PLAN.md)。**
 - **P5 全量验收**：端到端压测、安全回归、LangSmith 评测、扩展点文档。
 
 ## 8. P0 实施计划（已完成 · 2026-08-28）

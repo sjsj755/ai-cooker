@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 厨师 · 菜谱推荐</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="/">AI 厨师</a>
+      <nav class="site-nav">
+        <a href="/">推荐</a>
+        <a href="/search.html">搜索</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <h1>今天想吃什么？</h1>
+      <p>输入家里已有的食材，为你推荐缺料最少、最可行的菜谱。</p>
+    </section>
+
+    <section class="panel" aria-label="推荐设置">
+      <div class="field">
+        <label for="ingredient-input">已有食材</label>
+        <div id="ingredient-chips"></div>
+        <div class="suggest-wrap" id="ingredient-suggest"></div>
+        <p class="hint">输入后回车添加，或从联想中选择；最多 30 项，每项不超过 50 字。</p>
+      </div>
+
+      <div class="field">
+        <label>忌口 / 口味（可选）</label>
+        <div id="tags-picker"></div>
+        <p class="hint">最多选择 20 项；推荐结果将过滤所选标签。</p>
+      </div>
+
+      <div class="actions">
+        <button id="recommend-btn" type="button" class="btn primary">推荐菜谱</button>
+        <button id="clear-btn" type="button" class="btn ghost">清空</button>
+      </div>
+    </section>
+
+    <section id="banner" class="banner-area" aria-live="polite"></section>
+
+    <section id="results" class="results" aria-live="polite">
+      <div id="results-error"></div>
+      <div id="results-cards"></div>
+      <div id="results-empty"></div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>AI 厨师 · 基于已有食材的菜谱推荐系统</p>
+    </div>
+  </footer>
+
+  <script src="js/api.js" defer></script>
+  <script src="js/ui.js" defer></script>
+  <script src="js/recommend.js" defer></script>
+</body>
+</html>

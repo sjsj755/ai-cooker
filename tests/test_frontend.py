@@ -1,0 +1,169 @@
+"""P4 前端验收：静态路由 / 资源完整性 / 静态安全扫描 / 调用契约。"""
+
+from pathlib import Path
+
+FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
+
+
+# ---------- 静态路由 ----------
+
+
+def test_home_serves_index(client):
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "AI 厨师" in resp.text
+    assert 'src="js/recommend.js"' in resp.text
+
+
+def test_search_page_served(client):
+    resp = client.get("/search.html")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert 'src="js/search.js"' in resp.text
+
+
+def test_unknown_static_path_returns_404(client):
+    resp = client.get("/does-not-exist.html")
+    assert resp.status_code == 404
+
+
+def test_docs_and_openapi_not_shadowed(client):
+    assert client.get("/docs").status_code == 200
+    assert client.get("/openapi.json").status_code == 200
+
+
+def test_api_routes_not_shadowed_by_static_mount(client):
+    """静态挂载之后 /api/* 仍正常路由（轻量端点实测 + 422 证明未吞路由）。"""
+    assert client.get("/api/tags").status_code == 200
+    resp = client.get("/api/ingredients/search", params={"q": "土"})
+    assert resp.status_code == 200
+    assert resp.json()
+    resp = client.get("/api/recipes/search", params={"q": "土豆"})
+    assert resp.status_code == 200
+    assert "recipes" in resp.json()
+    resp = client.get("/api/recipes/999999")
+    assert resp.status_code == 404
+    assert "detail" in resp.json()
+    # recommend 用 422（缺必填字段）证明路由未被静态目录吞掉，同时避免触发 LLM
+    resp = client.post("/api/recipes/recommend", json={})
+    assert resp.status_code == 422
+
+
+# ---------- 资源完整性 ----------
+
+
+def _parse_assets(html: str) -> list[str]:
+    """提取 HTML 中的 <link href> 与 <script src>。"""
+    import re
+
+    links = re.findall(r'<link[^>]+href="([^"]+)"', html)
+    scripts = re.findall(r'<script[^>]+src="([^"]+)"', html)
+    return links + scripts
+
+
+def test_all_page_assets_exist_and_nonempty(client):
+    for page in ("/", "/search.html"):
+        resp = client.get(page)
+        assert resp.status_code == 200
+        assets = _parse_assets(resp.text)
+        assert assets, f"{page} 未引用任何 css/js 资源"
+        for asset in assets:
+            rel = asset.lstrip("/")
+            path = FRONTEND_DIR / rel
+            assert path.is_file(), f"{page} 引用的资源不存在: {asset}"
+            assert path.stat().st_size > 0, f"{page} 引用的资源为空: {asset}"
+
+
+def test_label_for_targets_exist():
+    """每个 <label for> 都必须指向真实元素 id（静态或动态 chip 输入框）。"""
+    import re
+
+    # 动态生成的 chip 输入框 id：由页面脚本传给 ui.renderChipInput
+    dynamic_ids = {
+        "index.html": {"ingredient-input"},
+        "search.html": {"search-ingredient-input"},
+    }
+    for page_file in ("index.html", "search.html"):
+        html = (FRONTEND_DIR / page_file).read_text(encoding="utf-8")
+        static_ids = set(re.findall(r'id="([^"]+)"', html))
+        for label_for in re.findall(r'<label[^>]+for="([^"]+)"', html):
+            assert (
+                label_for in static_ids or label_for in dynamic_ids[page_file]
+            ), f"{page_file}: label for='{label_for}' 无对应元素 id"
+
+    # 动态 id 必须由页面脚本传给渲染组件，且 ui.js 支持 id 选项
+    assert 'id: "ingredient-input"' in _read_js("recommend.js")
+    assert 'id: "search-ingredient-input"' in _read_js("search.js")
+    assert "opts.id" in _read_js("ui.js")
+
+
+# ---------- 静态安全扫描 ----------
+
+
+DANGEROUS_DOM_PATTERNS = ["innerHTML", "insertAdjacentHTML", "document.write", "eval("]
+SECRET_PATTERNS = ["sk-", "api_key=", "api-key=", "secret="]
+
+
+def test_frontend_has_no_dangerous_dom_api():
+    files = [
+        p
+        for p in FRONTEND_DIR.rglob("*")
+        if p.suffix.lower() in {".html", ".js", ".css"}
+    ]
+    assert files
+    for path in files:
+        content = path.read_text(encoding="utf-8")
+        for pattern in DANGEROUS_DOM_PATTERNS:
+            assert pattern not in content, f"{path.name} 含危险 DOM API: {pattern}"
+
+
+def test_frontend_has_no_hardcoded_secrets():
+    files = [
+        p
+        for p in FRONTEND_DIR.rglob("*")
+        if p.suffix.lower() in {".html", ".js", ".css"}
+    ]
+    for path in files:
+        content = path.read_text(encoding="utf-8")
+        for pattern in SECRET_PATTERNS:
+            assert pattern not in content, f"{path.name} 疑似硬编码密钥: {pattern}"
+
+
+# ---------- 前端调用契约 ----------
+
+
+def _read_js(name: str) -> str:
+    return (FRONTEND_DIR / "js" / name).read_text(encoding="utf-8")
+
+
+def test_frontend_api_paths_match_backend_contract():
+    recommend_js = _read_js("recommend.js")
+    search_js = _read_js("search.js")
+    api_js = _read_js("api.js")
+
+    # 推荐主页：推荐 / 联想 / 标签
+    assert "/api/recipes/recommend" in recommend_js
+    assert "/api/ingredients/search" in recommend_js
+    assert "/api/tags" in recommend_js
+
+    # 搜索页：检索 / 详情 / 联想 / 标签
+    assert "/api/recipes/search" in search_js
+    assert "/api/recipes/${recipeId}" in search_js
+    assert "/api/ingredients/search" in search_js
+    assert "/api/tags" in search_js
+
+    # 请求层必须实现任务级 registry 与超时常量
+    assert "createTaskRegistry" in api_js
+    assert "AbortController" in api_js
+    assert "REQUEST_TIMEOUT_MS" in api_js
+
+    # 与后端路由表比对：契约路径全部在 OpenAPI 中注册
+    from app.main import app
+
+    paths = app.openapi()["paths"]
+    assert "/api/recipes/recommend" in paths
+    assert "/api/recipes/search" in paths
+    assert "/api/recipes/{recipe_id}" in paths
+    assert "/api/ingredients/search" in paths
+    assert "/api/tags" in paths

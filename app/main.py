@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.api.router import api_router
 from app.config import get_settings
@@ -25,6 +26,11 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
     application.include_router(api_router)
+    # P4：同源托管静态前端；必须置于 include_router 之后，
+    # 保证 /api/*、/docs、/openapi.json 优先匹配，未知静态路径返回 404。
+    application.mount(
+        "/", StaticFiles(directory=settings.frontend_dir, html=True), name="frontend"
+    )
     return application
 
 

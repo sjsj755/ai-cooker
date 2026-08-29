@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI 厨师 · 菜谱搜索</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container header-inner">
+      <a class="brand" href="/">AI 厨师</a>
+      <nav class="site-nav">
+        <a href="/">推荐</a>
+        <a href="/search.html" aria-current="page">搜索</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <h1>菜谱搜索</h1>
+      <p>按关键词检索菜谱，可附加已有食材与忌口条件。</p>
+    </section>
+
+    <section class="panel" aria-label="搜索条件">
+      <div class="field">
+        <label for="search-q">关键词</label>
+        <input id="search-q" type="text" maxlength="200" placeholder="例如：土豆 鸡蛋" autocomplete="off">
+        <p class="hint">必填，不超过 200 字。</p>
+      </div>
+
+      <div class="field">
+        <label for="search-ingredient-input">已有食材（可选）</label>
+        <div id="search-ingredient-chips"></div>
+        <div class="suggest-wrap" id="search-ingredient-suggest"></div>
+        <p class="hint">输入后回车添加，或从联想中选择；最多 30 项，每项不超过 50 字。</p>
+      </div>
+
+      <div class="field">
+        <label>忌口 / 口味（可选）</label>
+        <div id="search-tags-picker"></div>
+        <p class="hint">最多选择 20 项。</p>
+      </div>
+
+      <div class="field-row">
+        <div class="field field-inline">
+          <label for="search-limit">结果数量</label>
+          <select id="search-limit">
+            <option value="5">5 条</option>
+            <option value="10" selected>10 条</option>
+            <option value="20">20 条</option>
+          </select>
+        </div>
+        <div class="actions">
+          <button id="search-btn" type="button" class="btn primary">搜索</button>
+          <button id="search-clear-btn" type="button" class="btn ghost">清空</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="search-banner" class="banner-area" aria-live="polite"></section>
+
+    <section id="search-results" class="results" aria-live="polite">
+      <div id="search-results-error"></div>
+      <div id="search-results-cards"></div>
+      <div id="search-results-empty"></div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>AI 厨师 · 基于已有食材的菜谱推荐系统</p>
+    </div>
+  </footer>
+
+  <div id="detail-drawer-root"></div>
+
+  <script src="js/api.js" defer></script>
+  <script src="js/ui.js" defer></script>
+  <script src="js/search.js" defer></script>
+</body>
+</html>

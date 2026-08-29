@@ -10,9 +10,9 @@
 
 Python 3.14 + uv · FastAPI · SQLAlchemy 2.x + Alembic · LangGraph · MySQL 8.x（InnoDB + utf8mb4）· pytest
 
-## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）→ P2 检索层（已完成）→ P3 LangGraph 工作流（已完成，2026-08-29 验收通过）
+## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）→ P2 检索层（已完成）→ P3 LangGraph 工作流（已完成，2026-08-29 验收通过）→ P4 前端（已完成，2026-08-29 验收通过：191 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_PLAN.md](docs/P4_PLAN.md)）
 
-P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档见 [docs/P1_COLLECTION_DESIGN.md](docs/P1_COLLECTION_DESIGN.md)；P2 检索层实施计划见 [docs/P2_PLAN.md](docs/P2_PLAN.md)；P3 LangGraph 工作流实施计划见 [docs/P3_PLAN.md](docs/P3_PLAN.md)。
+P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档见 [docs/P1_COLLECTION_DESIGN.md](docs/P1_COLLECTION_DESIGN.md)；P2 检索层实施计划见 [docs/P2_PLAN.md](docs/P2_PLAN.md)；P3 LangGraph 工作流实施计划见 [docs/P3_PLAN.md](docs/P3_PLAN.md)；P4 前端实施计划见 [docs/P4_PLAN.md](docs/P4_PLAN.md)。
 
 ### P1（parse）交付物
 
@@ -71,6 +71,13 @@ uv run python scripts/crawl_recipes.py --site xiachufang --stage ingest
 - P2 遗留：`ChromaStore.iter_chunk_metadata` 分页（batch=1000）+ 单页失败重试、仍失败中止（`FallbackError` 含 offset/batch）；`cleanup_orphan_chunks.py` 改扫描-比对-删除分离 + `--max-retries`，失败退出码 3
 - 评测：`scripts/eval_recommend.py`（10 条识别用例项级准确率基线 ≥0.85，实测 17/18 = 0.944）
 - 全量 171 个测试通过（134 + 新增 37）；真实环境验收（2026-08-29）：`ingredients=["土豆","鸡蛋"]` 实调 DeepSeek + 阿里云嵌入 → `degraded=false`、21 候选、LLM 推荐 4 条含步骤；5 并发 mock-LLM 全流程 < 5s
+
+### P4（前端 · 已完成）
+
+- FastAPI 同源托管原生 HTML/CSS/JS（`frontend/`）：推荐主页 `/`（食材 chips + 联想 debounce 300ms + 忌口/口味多选 + 推荐卡片，含缺料 / 步骤 / 难度 / 时长 / 降级横幅）+ 搜索页 `/search.html`（复用 P2 检索 + 详情抽屉，来源外链 `noopener noreferrer`）
+- 请求层 `api.js` 的 `createTaskRegistry`：按任务类型（`tags` / `autocomplete` / `recommend` / `search` / `detail`）维护 AbortController，重试先中断在途请求（幂等）、默认 5s 超时（`recommend` 任务 30s，适配真实 LLM 波动）、AbortError 分类（主动中断静默 / 超时与断网与 5xx 附重试按钮）；业务状态由页面脚本持有，`ui.js` 无状态渲染（全 `createElement` + `textContent` 防 XSS）
+- 配置：`FRONTEND_DIR=./frontend`（`app/config.py`）；`app/main.py` 在 `include_router` 之后挂载 StaticFiles，`/api/*`、`/docs` 不受影响
+- 6 条 Playwright 冒烟脚本（`scripts/e2e/`，`E2E_BASE_URL` 默认 `http://127.0.0.1:8000`）；`tests/test_frontend.py` 10 用例（静态路由 / 资源完整性 / 安全扫描 / 调用契约 / label for 匹配）；全量 191 测试通过
 
 当前文档记录的 P0 交付物：
 
