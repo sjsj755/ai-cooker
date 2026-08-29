@@ -1,0 +1,3 @@
+# 项目级 uv 配置
+# 将缓存放在项目内，避免依赖系统缓存目录（本机 AppData\Local\uv\cache 当前不可用）
+cache-dir = ".uv-cache"

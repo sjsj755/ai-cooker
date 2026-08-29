@@ -1,0 +1,31 @@
+[project]
+name = "ai-cooker"
+version = "0.1.0"
+description = "基于已有食材的菜谱推荐系统（AI 厨师）"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "sqlalchemy>=2.0",
+    "pymysql>=1.1",
+    "alembic>=1.14",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "langgraph>=0.2",
+    "langchain-core>=0.3",
+    "langchain-openai>=0.2",
+    "langsmith>=0.1",
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "chromadb>=1.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
