@@ -3,7 +3,8 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Integer, SmallInteger, String, Text, func
+from sqlalchemy import JSON, DateTime, Integer, SmallInteger, String, Text, func, text
+from sqlalchemy.dialects.mysql import DATETIME as MySQLDateTime
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -22,6 +23,14 @@ class Recipe(Base):
     description: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
+    )
+    # P2：由 MySQL DDL 强制 ON UPDATE CURRENT_TIMESTAMP(3)，
+    # 任何 SQL 更新（含 bulk/原生 SQL）都会刷新；不依赖 ORM onupdate。
+    updated_at: Mapped[datetime] = mapped_column(
+        MySQLDateTime(fsp=3),
+        nullable=False,
+        server_default=text("CURRENT_TIMESTAMP(3)"),
+        server_onupdate=text("CURRENT_TIMESTAMP(3)"),
     )
 
     recipe_ingredients: Mapped[list["RecipeIngredient"]] = relationship(

@@ -34,6 +34,7 @@ class Recommendation(BaseModel):
 class CookState(TypedDict, total=False):
     """工作流状态；retry_count 由状态机层强制约束防死循环。"""
 
+    query: str
     ingredients: list[str]
     exclude_tags: list[str]
     parsed_ingredients: list[ParsedIngredient]
@@ -48,9 +49,11 @@ class CookState(TypedDict, total=False):
 def empty_state(
     ingredients: list[str] | None = None,
     exclude_tags: list[str] | None = None,
+    query: str = "",
 ) -> CookState:
     """构造带默认值的初始状态，便于空状态跑通验收。"""
     return CookState(
+        query=query,
         ingredients=ingredients or [],
         exclude_tags=exclude_tags or [],
         parsed_ingredients=[],

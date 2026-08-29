@@ -66,9 +66,30 @@ class ChromaStore:
         """删除匹配元数据过滤条件的全部块（写入前清理旧块）。"""
         await asyncio.to_thread(self._delete_where_sync, where)
 
-    async def get_chunk_metadata(self, where: dict) -> list[dict]:
+    async def get_chunk_metadata(self, where: dict | None = None) -> list[dict]:
         """按过滤条件取块元数据（测试与 P2 过滤用）。"""
         return await asyncio.to_thread(self._get_chunk_metadata_sync, where)
+
+    async def query(
+        self,
+        query_embeddings: list[list[float]],
+        n_results: int,
+        where: dict | None = None,
+    ) -> list[dict]:
+        """P2：向量查询，返回扁平的命中列表 [{id, document, metadata, distance}]。"""
+        if not query_embeddings:
+            return []
+        if self.count() == 0:
+            return []
+        return await asyncio.to_thread(
+            self._query_sync, query_embeddings, n_results, where
+        )
+
+    async def delete_ids(self, ids: list[str]) -> None:
+        """按确定性 ID 删除块（食材词典全量刷新清理失效条目）。"""
+        if not ids:
+            return
+        await asyncio.to_thread(self._delete_ids_sync, ids)
 
     def _upsert_sync(
         self,
@@ -96,6 +117,42 @@ class ChromaStore:
     def _delete_where_sync(self, where: dict) -> None:
         self._collection.delete(where=where)
 
-    def _get_chunk_metadata_sync(self, where: dict) -> list[dict]:
+    def _get_chunk_metadata_sync(self, where: dict | None) -> list[dict]:
         result = self._collection.get(where=where, include=["metadatas"])
         return list(result.get("metadatas") or [])
+
+    def _query_sync(
+        self,
+        query_embeddings: list[list[float]],
+        n_results: int,
+        where: dict | None,
+    ) -> list[dict]:
+        result = self._collection.query(
+            query_embeddings=query_embeddings,
+            n_results=n_results,
+            where=where,
+            include=["documents", "metadatas", "distances"],
+        )
+        ids_rows = result.get("ids") or []
+        documents_rows = result.get("documents") or []
+        metadatas_rows = result.get("metadatas") or []
+        distances_rows = result.get("distances") or []
+        hits: list[dict] = []
+        for i in range(len(query_embeddings)):
+            ids = ids_rows[i] if i < len(ids_rows) else []
+            documents = documents_rows[i] if i < len(documents_rows) else []
+            metadatas = metadatas_rows[i] if i < len(metadatas_rows) else []
+            distances = distances_rows[i] if i < len(distances_rows) else []
+            for j, chunk_id in enumerate(ids):
+                hits.append(
+                    {
+                        "id": chunk_id,
+                        "document": documents[j] if j < len(documents) else None,
+                        "metadata": metadatas[j] if j < len(metadatas) else None,
+                        "distance": distances[j] if j < len(distances) else None,
+                    }
+                )
+        return hits
+
+    def _delete_ids_sync(self, ids: list[str]) -> None:
+        self._collection.delete(ids=ids)

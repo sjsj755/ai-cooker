@@ -14,12 +14,42 @@ from alembic.config import Config as AlembicConfig  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 from app.config import get_settings  # noqa: E402
+from app.core.embeddings import EmbeddingProvider  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
+from app.retrieval.bm25 import tokenize  # noqa: E402
 from scripts.seed_dictionary import seed  # noqa: E402
 
 get_settings.cache_clear()
 assert get_settings().database_url == TEST_DATABASE_URL
+
+
+class FakeEmbeddings(EmbeddingProvider):
+    """确定性伪嵌入（md5 词袋哈希），离线测试共享；fail=True 模拟嵌入故障。"""
+
+    def __init__(self, dim: int = 128, fail: bool = False) -> None:
+        import hashlib
+        import math
+
+        self.dim = dim
+        self.fail = fail
+        self.calls = 0
+        self._hashlib = hashlib
+        self._math = math
+
+    async def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        self.calls += 1
+        if self.fail:
+            raise RuntimeError("embed service down")
+        return [self._embed(t) for t in texts]
+
+    def _embed(self, text: str) -> list[float]:
+        vec = [0.0] * self.dim
+        for token in tokenize(text):
+            digest = int(self._hashlib.md5(token.encode("utf-8")).hexdigest(), 16)
+            vec[digest % self.dim] += 1.0
+        norm = self._math.sqrt(sum(v * v for v in vec)) or 1.0
+        return [v / norm for v in vec]
 
 
 @pytest.fixture(scope="session", autouse=True)

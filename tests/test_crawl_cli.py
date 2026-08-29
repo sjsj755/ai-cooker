@@ -89,7 +89,12 @@ def test_ingest_dry_run_without_key(tmp_path):
     assert main(["--stage", "ingest", "--dry-run", "--out-dir", str(tmp_path)]) == 0
 
 
-def test_ingest_without_key_exit3(tmp_path):
+def test_ingest_without_key_exit3(tmp_path, monkeypatch):
+    # 本机 .env 可能已配置 EMBEDDING_API_KEY，测试内显式置空，保证退出码语义稳定
+    monkeypatch.setattr(
+        "scripts.crawl_recipes.get_settings",
+        lambda: Settings(embedding_api_key=None),
+    )
     assert main(["--stage", "ingest", "--out-dir", str(tmp_path)]) == 3
 
 

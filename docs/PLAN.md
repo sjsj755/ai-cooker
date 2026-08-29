@@ -2,7 +2,7 @@
 
 > 基于已有食材的菜谱推荐系统。本文档固化当前架构决策、流程图、兜底策略、测试门禁与 P0 实施计划，作为后续实现与扩展的唯一依据。
 
-**阶段状态：P0 已完成（2026-08-28 验收通过）→ P1 已完成（parse + ingest + 真实嵌入验收，2026-08-29 验收通过；实施计划与验收结果见 [docs/P1_PLAN.md](P1_PLAN.md)）。**
+**阶段状态：P0 已完成（2026-08-28 验收通过）→ P1 已完成（parse + ingest + 真实嵌入验收，2026-08-29 验收通过；实施计划与验收结果见 [docs/P1_PLAN.md](P1_PLAN.md)）→ P2 检索层已完成（BM25 + 向量 + RRF + 缺料/评分 + search API + LangGraph 节点 + 食材向量库，2026-08-29 验收通过；实施计划与验收结果见 [docs/P2_PLAN.md](P2_PLAN.md)）。**
 
 ## 1. 项目概述
 
@@ -182,12 +182,13 @@ flowchart LR
 - **性能门禁**：`recommend` P95 < 5s（含 LLM）、`search` P95 < 200ms、`detail` P95 < 100ms、错误率 < 1%；k6/locust 压测；`EXPLAIN` 排查慢查询；1 万 / 5 万条数据规模回归检索耗时。
 - **安全门禁**：SQL 注入（全量参数化）、Prompt 注入（指令隔离 + 输出强校验）、XSS（渲染转义）、API 限流与 CORS 白名单、密钥只走环境变量、`uv audit` 依赖扫描、反馈数据匿名化、采集遵守 robots 并标注来源。
 - **集成与扩展性**：Docker MySQL 测试库迁移幂等、`utf8mb4` 中文读写；替换 LLM / 检索器 / 评分策略实现后核心流程与响应结构不变。
+- **鲁棒性门禁（全阶段）**：所有外部依赖（MySQL / Chroma / Embedding / LLM）故障均有降级路径；故障注入测试通过（不 500、不崩溃、响应结构稳定）；输入边界（长度/数量/字符）与并发回归纳入每阶段验收。
 
 ## 7. 实施阶段
 
 - **P0 基建**：项目结构、docker-compose（MySQL 8.x）、Alembic 迁移、接口抽象层（LLM/Embeddings/Retriever/Scoring/Crawler）、LangGraph 状态与空图骨架、兜底框架（重试计数 + `degraded` 标记）、食材词典种子。**✅ 已完成（2026-08-28），验收记录见 8.7。**
 - **P1 采集管线**：首个 Crawler 适配器 + 清洗 + 断点续采 + MySQL/Chroma 双写 + 嵌入 + OpenAI 兼容 LLM/嵌入实现（**修订：两阶段管线 + JSON 中间产物 + 食材/调料分流 + 语义分块**）。**✅ 已完成（2026-08-29），实施计划与验收结果见 [docs/P1_PLAN.md](P1_PLAN.md)。**
-- **P2 检索层**：`HybridRetriever`（BM25 + 向量）+ 默认 `ScoringStrategy`，验证召回质量与耗时基线。
+- **P2 检索层**：`HybridRetriever`（BM25 + 向量）+ 默认 `ScoringStrategy`，验证召回质量与耗时基线。**✅ 已完成（2026-08-29），实施计划与验收结果见 [docs/P2_PLAN.md](P2_PLAN.md)。**
 - **P3 LangGraph 工作流**：LLM 识别节点（复用 `OpenAICompatibleLLM`）+ 完整图 + 兜底分支 + 结构化生成 + 推荐 API。
 - **P4 前端**：Web 输入页、推荐卡片、忌口选择、降级提示展示。
 - **P5 全量验收**：端到端压测、安全回归、LangSmith 评测、扩展点文档。

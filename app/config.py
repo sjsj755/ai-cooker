@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -44,6 +45,34 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_timeout_seconds: float = 30.0
     llm_temperature: float = 0.2
+
+    # P2 检索（BM25 + Chroma 向量 + RRF 融合）
+    retrieval_top_k: int = 50
+    retrieval_fusion_rrf_k: int = 60
+    retrieval_bm25_weight: float = 0.5
+    retrieval_vector_weight: float = 0.5
+    retrieval_vector_query_multiplier: int = 4
+    retrieval_vector_max_distance: float = 0.5
+
+    # P2 评分（融合分仅作同缺料数内的决胜分，排序由 RankingService 字典序保证）
+    scoring_w_fusion: float = 0.4
+    scoring_w_coverage: float = 0.5
+    scoring_w_difficulty: float = 0.05
+    scoring_w_time: float = 0.05
+
+    # P2 食材联想向量库
+    chroma_ingredients_collection: str = "ingredients_docs"
+
+    @model_validator(mode="after")
+    def _validate_retrieval_config(self) -> "Settings":
+        if self.retrieval_fusion_rrf_k <= 0:
+            raise ValueError("RETRIEVAL_FUSION_RRF_K 必须大于 0")
+        weight_sum = self.retrieval_bm25_weight + self.retrieval_vector_weight
+        if abs(weight_sum - 1.0) > 1e-6:
+            raise ValueError(
+                "RETRIEVAL_BM25_WEIGHT 与 RETRIEVAL_VECTOR_WEIGHT 之和必须为 1"
+            )
+        return self
 
 
 @lru_cache

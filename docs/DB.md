@@ -81,6 +81,7 @@ erDiagram
 | `steps` | JSON | 否 | NULL | 做法步骤数组，P1 采集时约定结构（如 `[{instruction, minutes}]`） |
 | `description` | TEXT | 否 | NULL | 简介 / 描述 |
 | `created_at` | DATETIME | 是 | `now()` | 创建时间 |
+| `updated_at` | DATETIME(3) | 是 | `CURRENT_TIMESTAMP(3)` | 最后更新时间；**DDL 级 `ON UPDATE CURRENT_TIMESTAMP(3)` 强制**（ORM / bulk / 原生 SQL 更新均自动刷新），P2 BM25 语料缓存探针依赖 |
 
 索引：`PRIMARY KEY (id)`、`UNIQUE KEY (source_url)`。
 
@@ -189,6 +190,7 @@ CREATE TABLE `recipes` (
   `steps` json DEFAULT NULL,
   `description` text COLLATE utf8mb4_unicode_ci,
   `created_at` datetime NOT NULL DEFAULT (now()),
+  `updated_at` datetime(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   UNIQUE KEY `source_url` (`source_url`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

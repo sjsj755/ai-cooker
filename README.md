@@ -10,9 +10,9 @@
 
 Python 3.14 + uv · FastAPI · SQLAlchemy 2.x + Alembic · LangGraph · MySQL 8.x（InnoDB + utf8mb4）· pytest
 
-## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）
+## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）→ P2 检索层（已完成）
 
-P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档见 [docs/P1_COLLECTION_DESIGN.md](docs/P1_COLLECTION_DESIGN.md)。
+P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档见 [docs/P1_COLLECTION_DESIGN.md](docs/P1_COLLECTION_DESIGN.md)；P2 检索层实施计划见 [docs/P2_PLAN.md](docs/P2_PLAN.md)。
 
 ### P1（parse）交付物
 
@@ -44,6 +44,18 @@ uv run python scripts/crawl_recipes.py --site xiachufang --stage ingest
 # 真实嵌入需配置 EMBEDDING_API_KEY；本机验收用阿里云百炼 qwen3.7-text-embedding（1024 维），换服务商改 EMBEDDING_BASE_URL / EMBEDDING_MODEL
 # P3 LLM 兼容：LLM_BASE_URL / LLM_MODEL / LLM_API_KEY（如 DeepSeek / Qwen / Ollama；密钥留空则不带鉴权头）
 ```
+
+### P2（检索）交付物
+
+- `app/retrieval/`：`BM25Corpus`（中文 bigram 分词、语料缓存探针 `(COUNT(*), MAX(id), MAX(updated_at))`、双缓冲 + 锁、重建失败四态）、`HybridRetriever`（BM25 + Chroma 双路，块级 RRF 证据均值 `rrf()` 原语、向量距离阈值 0.5、四态降级）、`MissingIngredientsCalculator`（调料排除、可用食材纯精确匹配）、`DefaultScoringStrategy`（融合归一 + 覆盖率 + 难度/时长微调）、`RankingService`（缺料数优先字典序排序）
+- `GET /api/recipes/search`：`q` + `ingredients` + `exclude_tags` + `limit`，注册于 `/{recipe_id}` 之前；响应 `SearchResponse{recipes, degraded, notice}`；空结果带提示、MySQL 故障 503
+- LangGraph：`CookState.query` + `retrieve_node`（`state.query` 为唯一检索文本）/ `rank_node`（Top-5）
+- 食材联想向量库：`scripts/index_ingredients.py` 幂等写入 `ingredients_docs`；`/api/ingredients/search` LIKE 不足时向量补充合并去重，失败回退 LIKE-only
+- `scripts/cleanup_orphan_chunks.py`（`--dry-run`）、`scripts/seed_synthetic_recipes.py`、`scripts/eval_retrieval.py`（50 用例 recall@5/coverage、单路 vs 混合、1k/5k 性能基线）
+- 表结构变更：`recipes.updated_at`（DDL 级 `ON UPDATE CURRENT_TIMESTAMP(3)`，迁移 `b2e7f1c4a9d3`）
+- 全量 134 个测试通过；真实环境验收（2026-08-29）：`GET /api/recipes/search?q=土豆 鸡蛋&ingredients=土豆,鸡蛋` 混合检索 `degraded=false`、缺 0 料排最前；无意义查询返回空 + notice；评测 recall@5=0.755（≥0.7）、混合 ≥ 单路；1k 语料构建 113ms/查询 P95 23ms、5k 构建 397ms/查询 P95 6.4ms
+
+> 阿里云百炼 compatible-mode 的 embedding 单批上限 20：使用百炼时在 `.env` 设 `EMBEDDING_BATCH_SIZE=20`（已按此验收）。
 
 当前文档记录的 P0 交付物：
 
@@ -90,7 +102,8 @@ FLUSH PRIVILEGES;
 | 方法 | 路径 | 说明 | 状态 |
 |---|---|---|---|
 | GET | `/health` | 健康检查（含 DB） | P0 完成 |
-| GET | `/api/ingredients/search?q=` | 食材联想 | P0 完成 |
+| GET | `/api/ingredients/search?q=` | 食材联想（LIKE + 向量补充） | P0 完成 / P2 增强 |
+| GET | `/api/recipes/search?q=&ingredients=&exclude_tags=` | 混合检索（BM25 + 向量 + 缺料/评分） | P2 完成 |
 | GET | `/api/recipes/{id}` | 菜谱详情 | P0 完成（空库返回 404） |
 | GET | `/api/tags` | 标签列表 | P0 完成 |
 | POST | `/api/recipes/recommend` | 推荐（LangGraph 工作流） | 501 占位，P3 实现 |
