@@ -1,4 +1,4 @@
-"""P5 start.sh 子进程用例：FEEDBACK_SALT / Redis / 非 bash 等价校验。
+"""P5/P6 start.sh 子进程用例：FEEDBACK_SALT / Redis / 反代白名单 / 非 bash 等价校验。
 
 无可用 bash 的环境自动跳过，并在 docs/P5_PLAN.md §8 记录原因；
 部署须知覆盖“非 bash 编排等价校验或容器入口调用 start.sh”。
@@ -39,7 +39,14 @@ needs_bash = pytest.mark.skipif(
 def _run(env: dict[str, str]) -> subprocess.CompletedProcess:
     clean = {k: v for k, v in os.environ.copy().items()}
     # 清除可能干扰的 P5 变量，保证用例从干净状态开始
-    for key in ("FEEDBACK_SALT", "RATE_LIMIT_STORAGE", "RATE_LIMIT_REDIS_URL", "WORKERS"):
+    for key in (
+        "FEEDBACK_SALT",
+        "RATE_LIMIT_STORAGE",
+        "RATE_LIMIT_REDIS_URL",
+        "WORKERS",
+        "BEHIND_PROXY",
+        "FORWARDED_ALLOW_IPS",
+    ):
         clean.pop(key, None)
     clean.update(env)
     return subprocess.run(
@@ -78,6 +85,35 @@ def test_start_sh_fails_redis_storage_without_url():
 @needs_bash
 def test_start_sh_check_passes_when_configured():
     result = _run({"FEEDBACK_SALT": "test-salt", "WORKERS": "1"})
+    assert result.returncode == 0
+    assert "校验通过" in result.stdout
+
+
+@needs_bash
+def test_start_sh_fails_behind_proxy_without_allow_ips():
+    """P6：BEHIND_PROXY=true 且 FORWARDED_ALLOW_IPS 为空 → exit 1（拒绝启动而非 WARN）。"""
+    result = _run({"FEEDBACK_SALT": "test-salt", "BEHIND_PROXY": "true"})
+    assert result.returncode == 1
+    assert "FORWARDED_ALLOW_IPS" in result.stderr
+
+
+@needs_bash
+def test_start_sh_passes_behind_proxy_with_allow_ips():
+    result = _run(
+        {
+            "FEEDBACK_SALT": "test-salt",
+            "BEHIND_PROXY": "true",
+            "FORWARDED_ALLOW_IPS": "172.28.0.10",
+        }
+    )
+    assert result.returncode == 0
+    assert "校验通过" in result.stdout
+
+
+@needs_bash
+def test_start_sh_not_enforced_direct_mode():
+    """BEHIND_PROXY=false 时不强制白名单（本地直连开发）。"""
+    result = _run({"FEEDBACK_SALT": "test-salt", "BEHIND_PROXY": "false"})
     assert result.returncode == 0
     assert "校验通过" in result.stdout
 

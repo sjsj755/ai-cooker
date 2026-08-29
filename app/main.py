@@ -1,13 +1,15 @@
-"""FastAPI 应用工厂 + 全局路由注册 + 限流装配（P5）。"""
+"""FastAPI 应用工厂 + 全局路由注册 + 限流装配（P5）+ 安全加固（P6）。"""
 
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from slowapi.errors import RateLimitExceeded
+from starlette.datastructures import MutableHeaders
 
 from app.api.router import api_router
 from app.config import get_settings
@@ -17,6 +19,38 @@ from app.core.rate_limit import build_limiter
 logger = get_logger("app.main")
 
 RATE_LIMIT_MESSAGE = "请求过于频繁，请稍后重试"
+
+
+class SecurityHeadersMiddleware:
+    """P6 安全响应头：CSP / X-Frame-Options / X-Content-Type-Options / Referrer-Policy。
+
+    CSP 指令按前端静态扫描结果校准（同源脚本/样式、无外链、无内联 style），
+    禁止外部域加载；直连 app 端口同样生效，Caddy 不重复设置。
+    """
+
+    HEADERS = {
+        "Content-Security-Policy": "default-src 'self'",
+        "X-Frame-Options": "DENY",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+    }
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                for key, value in self.HEADERS.items():
+                    headers.append(key, value)
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
 
 
 def _rate_limit_exceeded_handler(
@@ -67,11 +101,13 @@ async def lifespan(application: FastAPI):
 def create_app() -> FastAPI:
     settings = get_settings()
     limiter = build_limiter(settings)
+    docs_enabled = settings.docs_enabled
     application = FastAPI(
         title=settings.app_name,
         version=settings.version,
-        docs_url="/docs",
-        openapi_url="/openapi.json",
+        docs_url="/docs" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
         lifespan=lifespan,
     )
     if limiter is not None:
@@ -90,6 +126,21 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
+    # P6：Host 白名单（逗号分隔；空 = 不校验）。TrustedHostMiddleware 返回 400，
+    # 防 Host 头注入 / 缓存投毒。
+    if settings.allowed_hosts.strip():
+        allowed_hosts = [
+            host.strip()
+            for host in settings.allowed_hosts.split(",")
+            if host.strip()
+        ]
+        if allowed_hosts:
+            application.add_middleware(
+                TrustedHostMiddleware, allowed_hosts=allowed_hosts
+            )
+    # P6：安全响应头（默认开启；测试 / 个别场景可显式关闭）
+    if settings.security_headers_enabled:
+        application.add_middleware(SecurityHeadersMiddleware)
     application.include_router(api_router)
     # P4：同源托管静态前端；必须置于 include_router 之后，
     # 保证 /api/*、/docs、/openapi.json 优先匹配，未知静态路径返回 404。

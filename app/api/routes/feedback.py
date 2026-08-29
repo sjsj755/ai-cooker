@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_db
 from app.config import get_settings
 from app.core.logging import get_logger, log_event
+from app.core.proxy_ip import get_client_ip
 from app.core.rate_limit import build_limiter, make_route_limit
 from app.models import Recipe, UserFeedback
 from app.schemas.feedback import FeedbackIn, FeedbackOut
@@ -24,9 +25,10 @@ def client_fingerprint(request: Request) -> str:
     """SHA-256(IP + FEEDBACK_SALT)：64 位十六进制，不落明文 IP。
 
     FEEDBACK_SALT 生产由 scripts/start.sh 强校验非空；开发默认空盐仍保持匿名
-    （哈希不可逆，攻击者无法从指纹反推 IP）。
+    （哈希不可逆，攻击者无法从指纹反推 IP）。IP 语义与限流桶一致：
+    反代后取真实客户端 IP（get_client_ip 右到左解析，P6）。
     """
-    ip = request.client.host if request.client else "unknown"
+    ip = get_client_ip(request)
     salt = get_settings().feedback_salt
     return hashlib.sha256(f"{ip}{salt}".encode("utf-8")).hexdigest()
 

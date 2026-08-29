@@ -1,0 +1,7 @@
+# P6 边缘反代（Caddy 自动 HTTPS，HTTP-01 签发）。
+# 保持“边缘模式”：不要配置 trusted_proxies —— 未配置时 Caddy 用直连 IP
+# 重写 X-Forwarded-For（客户端伪造值被丢弃）；app 只信 FORWARDED_ALLOW_IPS
+# 中的 Caddy 容器 IP（172.28.0.10）并按右到左算法取真实客户端。
+{$CADDY_DOMAIN} {
+	reverse_proxy app:8000
+}

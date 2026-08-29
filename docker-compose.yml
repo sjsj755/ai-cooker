@@ -1,20 +1,27 @@
+# P6 全栈部署：mysql + redis + app + caddy（自动 HTTPS）。
+# 凭据全部走 .env（复制 .env.example 后填写强口令；禁止写死在 compose 内）。
+# 自定义网络 ai_cooker_net（172.28.0.0/16）固定 Caddy 容器 IP 172.28.0.10，
+# FORWARDED_ALLOW_IPS 必须与此一致，否则 IP 解析回退直连并 WARN。
+name: ai-cooker
+
 services:
   mysql:
     image: mysql:8.4
     container_name: ai-cooker-mysql
     restart: unless-stopped
     environment:
-      MYSQL_DATABASE: ai_cooker
-      MYSQL_USER: ai_cooker
-      MYSQL_PASSWORD: ai_cooker
-      MYSQL_ROOT_PASSWORD: ai_cooker_root
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-ai_cooker}
+      MYSQL_USER: ${MYSQL_USER:-ai_cooker}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD 必填（强口令，禁止默认值）}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD 必填（强口令，禁止默认值）}
       TZ: Asia/Shanghai
     command:
       - --character-set-server=utf8mb4
       - --collation-server=utf8mb4_unicode_ci
-    ports:
-      # 本机已有 MySQL 时可改用其他端口：MYSQL_PORT=3307 docker compose up -d mysql
-      - "${MYSQL_PORT:-3306}:3306"
+    # 生产不映射宿主端口（仅经 Caddy 暴露 80/443）；
+    # 本机调试需要直连 MySQL 时再显式开启：
+    # ports:
+    #   - "${MYSQL_PORT:-3306}:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
@@ -22,6 +29,100 @@ services:
       interval: 5s
       timeout: 5s
       retries: 30
+    networks:
+      - ai_cooker_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: ai-cooker-redis
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD 必填（强口令，禁止默认值）}
+    command: ["sh", "-c", "exec redis-server --requirepass \"$$REDIS_PASSWORD\""]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    networks:
+      - ai_cooker_net
+
+  app:
+    build: .
+    image: ai-cooker:latest
+    container_name: ai-cooker-app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql+pymysql://${MYSQL_USER:-ai_cooker}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-ai_cooker}
+      RATE_LIMIT_ENABLED: "true"
+      RATE_LIMIT_STORAGE: redis
+      RATE_LIMIT_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      FEEDBACK_SALT: ${FEEDBACK_SALT:?FEEDBACK_SALT 必填（独立随机盐，禁止开发盐）}
+      BEHIND_PROXY: "true"
+      FORWARDED_ALLOW_IPS: 172.28.0.10
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:?ALLOWED_HOSTS 必填（真实域名，逗号分隔）}
+      DOCS_ENABLED: "false"
+      SECURITY_HEADERS_ENABLED: "true"
+      LLM_MOCK: "${LLM_MOCK:-false}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      EMBEDDING_API_KEY: "${EMBEDDING_API_KEY:-}"
+      EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-https://api.openai.com/v1}"
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-text-embedding-3-small}"
+      LLM_API_KEY: "${LLM_API_KEY:-}"
+      LLM_BASE_URL: "${LLM_BASE_URL:-https://api.openai.com/v1}"
+      LLM_MODEL: "${LLM_MODEL:-gpt-4o-mini}"
+      LANGSMITH_API_KEY: "${LANGSMITH_API_KEY:-}"
+      # 健康检查探测时显式携带真实域名 Host（须在 ALLOWED_HOSTS 内），
+      # 避免 127.0.0.1 Host 被 TrustedHostMiddleware 400 拒掉
+      CADDY_DOMAIN: ${CADDY_DOMAIN:?CADDY_DOMAIN 必填}
+    volumes:
+      # 绑定挂载 data/（含 Chroma 持久化），host 侧 backup.sh 可直接 tar data/chroma
+      - ./data:/app/data
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os, urllib.request; req = urllib.request.Request('http://127.0.0.1:8000/health/ready', headers={'Host': os.environ['CADDY_DOMAIN']}); urllib.request.urlopen(req, timeout=3)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - ai_cooker_net
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: ai-cooker-caddy
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN:?CADDY_DOMAIN 必填（已解析到本机的域名）}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      ai_cooker_net:
+        # 固定 IP：FORWARDED_ALLOW_IPS 与此一致；变更网络需同步更新该白名单
+        ipv4_address: 172.28.0.10
 
 volumes:
   mysql_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  ai_cooker_net:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

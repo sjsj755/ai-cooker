@@ -1,0 +1,127 @@
+# P6 CI 门禁（§3.8）：单 job 串行——
+# uv 同步 → 迁移/种子 → pytest → 6 条 Playwright 冒烟 → k6 10k 门禁
+# → rate_limit 单独实例（RATE_LIMIT_ENABLED=true + storage=memory，不污染主压测实例）。
+# 50k 档沿用 P5 §8 留痕，不在 CI 重复（时间预算有限）。
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: mysql+pymysql://ai_cooker:ai_cooker@127.0.0.1:3306/ai_cooker_test
+      LLM_MOCK: "true"
+      RATE_LIMIT_ENABLED: "false"
+      EMBEDDING_API_KEY: ""
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: ai_cooker_test
+          MYSQL_USER: ai_cooker
+          MYSQL_PASSWORD: ai_cooker
+          MYSQL_ROOT_PASSWORD: root_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot_test"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Migrate
+        run: uv run alembic upgrade head
+
+      - name: Seed dictionary
+        run: uv run python scripts/seed_dictionary.py
+
+      - name: Seed 10k synthetic recipes
+        run: uv run python scripts/seed_synthetic_recipes.py --count 10000
+
+      - name: pytest
+        run: uv run pytest
+
+      - name: Install Playwright browsers
+        run: uv run playwright install --with-deps chromium
+
+      - name: Start app (main instance)
+        run: |
+          nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/ci-app.log 2>&1 &
+          echo $! > /tmp/ci-app.pid
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8000/health/live >/dev/null 2>&1; then
+              echo "app 已就绪"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "app 未在 120s 内就绪"
+          cat /tmp/ci-app.log
+          exit 1
+
+      - name: Playwright smokes (6)
+        env:
+          E2E_BASE_URL: http://127.0.0.1:8000
+        run: |
+          for smoke in search search_detail recommend_happy exclude_tags degraded autocomplete; do
+            uv run python "scripts/e2e/smoke_${smoke}.py"
+          done
+
+      - uses: grafana/setup-k6-action@v1
+
+      - name: k6 10k gates
+        run: |
+          mkdir -p .tmp_bridge/ci
+          k6 run --summary-export=.tmp_bridge/ci/search.json scripts/k6/search.js
+          k6 run --summary-export=.tmp_bridge/ci/detail.json scripts/k6/detail.js
+          k6 run --summary-export=.tmp_bridge/ci/ingredients.json scripts/k6/ingredients.js
+          k6 run --summary-export=.tmp_bridge/ci/tags.json scripts/k6/tags.js
+          k6 run --summary-export=.tmp_bridge/ci/recommend_mock.json scripts/k6/recommend_mock.js
+          k6 run --summary-export=.tmp_bridge/ci/feedback.json scripts/k6/feedback.js
+
+      - name: Start rate-limit instance (separate)
+        env:
+          RATE_LIMIT_ENABLED: "true"
+          RATE_LIMIT_STORAGE: memory
+        run: |
+          nohup .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8001 > /tmp/ci-rate.log 2>&1 &
+          echo $! > /tmp/ci-rate.pid
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8001/health/live >/dev/null 2>&1; then
+              echo "rate-limit 实例已就绪"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "rate-limit 实例未在 120s 内就绪"
+          cat /tmp/ci-rate.log
+          exit 1
+
+      - name: k6 rate_limit scenario
+        env:
+          BASE_URL: http://127.0.0.1:8001
+        run: k6 run --summary-export=.tmp_bridge/ci/rate_limit.json scripts/k6/rate_limit.js
+
+      - name: Stop app instances
+        if: always()
+        run: |
+          for pid_file in /tmp/ci-app.pid /tmp/ci-rate.pid; do
+            if [ -f "${pid_file}" ]; then
+              kill "$(cat "${pid_file}")" 2>/dev/null || true
+              rm -f "${pid_file}"
+            fi
+          done

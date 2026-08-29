@@ -6,6 +6,8 @@
 #      反推全部反馈指纹）——缺失即 exit 1，不是 WARN；
 #   2. RATE_LIMIT_STORAGE=redis 时 RATE_LIMIT_REDIS_URL 必填；
 #   3. WORKERS>1 时必须配 Redis 限流（memory 模式各进程独立计数，无法跨进程一致）。
+#   4. BEHIND_PROXY=true 时必须配置 FORWARDED_ALLOW_IPS（P6：反代后误用直连
+#      计数 = 所有用户共享一个限流桶，形同虚设；缺失即 exit 1，不是 WARN）。
 #
 # 用法：
 #   FEEDBACK_SALT=... ./scripts/start.sh                 # 正常启动
@@ -57,8 +59,14 @@ if [ "${WORKERS}" -gt 1 ] 2>/dev/null; then
   fi
 fi
 
+BEHIND_PROXY="${BEHIND_PROXY:-false}"
+if [ "${BEHIND_PROXY}" = "true" ] && [ -z "${FORWARDED_ALLOW_IPS:-}" ]; then
+  echo "[start] ERROR: BEHIND_PROXY=true 时必须配置 FORWARDED_ALLOW_IPS（可信代理 IP/CIDR 白名单）" >&2
+  exit 1
+fi
+
 if [ "${1:-}" = "--check" ]; then
-  echo "[start] 校验通过（FEEDBACK_SALT 已设置；WORKERS=${WORKERS}；RATE_LIMIT_STORAGE=${RATE_LIMIT_STORAGE}）"
+  echo "[start] 校验通过（FEEDBACK_SALT 已设置；WORKERS=${WORKERS}；RATE_LIMIT_STORAGE=${RATE_LIMIT_STORAGE}；BEHIND_PROXY=${BEHIND_PROXY}）"
   exit 0
 fi
 

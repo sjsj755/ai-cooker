@@ -5,6 +5,8 @@ from functools import lru_cache
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.proxy_ip import parse_trusted_networks
+
 
 class Settings(BaseSettings):
     """集中管理环境变量；密钥只走环境变量，禁止硬编码入库。"""
@@ -89,6 +91,13 @@ class Settings(BaseSettings):
     # P5 LangSmith 评测（可选；无 key 时 eval --trace 跳过）
     langsmith_api_key: str | None = None
 
+    # P6 部署（可信代理 / 安全加固）
+    behind_proxy: bool = False
+    forwarded_allow_ips: str = ""
+    docs_enabled: bool = True
+    allowed_hosts: str = ""
+    security_headers_enabled: bool = True
+
     @model_validator(mode="after")
     def _validate_retrieval_config(self) -> "Settings":
         if self.retrieval_fusion_rrf_k <= 0:
@@ -107,6 +116,24 @@ class Settings(BaseSettings):
             raise ValueError("RATE_LIMIT_STORAGE 必须为 memory 或 redis")
         if self.rate_limit_storage == "redis" and not self.rate_limit_redis_url:
             raise ValueError("RATE_LIMIT_STORAGE=redis 时必须配置 RATE_LIMIT_REDIS_URL")
+        return self
+
+    @model_validator(mode="after")
+    def _validate_p6_deploy_config(self) -> "Settings":
+        """P6 部署配置校验（fail-fast）：反代白名单非空且格式合法。"""
+        if self.behind_proxy and not self.forwarded_allow_ips.strip():
+            raise ValueError(
+                "BEHIND_PROXY=true 时必须配置 FORWARDED_ALLOW_IPS"
+                "（可信代理 IP/CIDR 白名单，逗号分隔）"
+            )
+        if self.forwarded_allow_ips.strip():
+            # 白名单格式错误（非 IP/CIDR）直接拒绝启动，避免限流静默按错误白名单计数
+            try:
+                parse_trusted_networks(self.forwarded_allow_ips)
+            except ValueError as exc:
+                raise ValueError(
+                    f"FORWARDED_ALLOW_IPS 含非法 IP/CIDR 条目：{exc}"
+                ) from exc
         return self
 
 
