@@ -307,7 +307,7 @@ ai-cooker/
 | `/health` 语义单一 | DB 故障返回 200 + `degraded`，编排器无法区分存活/就绪 | ✅ 已由 P1 完成：`/health/live`（恒 200）与 `/health/ready`（DB + Chroma，故障 503） |
 | 测试库准备未文档化 | 新环境跑 pytest 前需 root 预建 `ai_cooker_test` 并授权 | ✅ 已整改（P1）：README 说明 + `scripts/init_test_db.sql` |
 | 日志 / 告警缺失 | 兜底矩阵承诺的“错误日志告警”未落地 | ✅ 已由 P1 完成：`app/core/logging.py` 结构化日志 + parse/ingest 事件日志 |
-| 搜索 `aliases LIKE`（JSON 列隐式转换） | 可用但不可移植、无索引 | ⏳ 待办：P2 由向量检索替代，已在路由注释标注演进路径 |
+| 搜索 `aliases LIKE`（JSON 列隐式转换） | 可用但不可移植、无索引 | ✅ 已完成（P2）：`/api/ingredients/search` LIKE 不足时由 `ingredients_docs` 向量补充，`scripts/index_ingredients.py` 幂等写入 |
 | API 限流未实现 | 安全门禁缺口 | ⏳ 归入 P5 安全回归（引入 slowapi 等） |
 | 根目录 `main.py` 遗留 | 计划要求删除 | ✅ 已删除，入口统一 `app.main:app` |
 

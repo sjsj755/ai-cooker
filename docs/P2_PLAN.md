@@ -1,6 +1,6 @@
 # P2 检索层 —— 实施计划
 
-> 阶段状态：**P2 计划已定稿（待实施）**。前置：P0（2026-08-28）、P1（2026-08-29）均已完成并验收。本文档依据 [docs/PLAN.md](PLAN.md) §2.1/§4/§7、P1 实际落地的接口与 Chroma 约定（[P1_PLAN.md](P1_PLAN.md) §11、[P1_COLLECTION_DESIGN.md](P1_COLLECTION_DESIGN.md) §16）编写，是 P2 的唯一实施依据；实施完成后回填第 9 节验收结果。
+> 阶段状态：**P2 已完成（2026-08-29 验收通过，结果见第 9 节）**。前置：P0（2026-08-28）、P1（2026-08-29）均已完成并验收。本文档依据 [docs/PLAN.md](PLAN.md) §2.1/§4/§7、P1 实际落地的接口与 Chroma 约定（[P1_PLAN.md](P1_PLAN.md) §11、[P1_COLLECTION_DESIGN.md](P1_COLLECTION_DESIGN.md) §16）编写，是 P2 的唯一实施依据。
 
 ## 1. 目标与范围
 
@@ -151,6 +151,7 @@ app/vector_store.py              # M + query()/delete_ids()/get_chunk_metadata(N
 app/api/routes/recipes.py        # M + GET /search（注册在 /{recipe_id} 之前）
 app/api/routes/ingredients.py    # M + 向量兜底
 app/graph/nodes.py               # M 填充 retrieve_node / rank_node
+app/graph/state.py               # M + CookState.query
 app/schemas/recipes.py           # M + RecipeCandidateOut / SearchResponse
 scripts/index_ingredients.py     # A 食材词典向量化
 scripts/seed_synthetic_recipes.py# A 合成评测数据（测试/评测共用）
@@ -164,6 +165,9 @@ tests/test_scoring.py            # A
 tests/test_search_api.py         # A
 tests/test_retrieval_nodes.py    # A
 tests/test_ingredients_vector.py # A
+tests/test_cleanup_orphan.py     # A
+tests/helpers.py                 # A 测试共享插入/清理
+tests/test_workflow.py           # M 空图跑通断言（无 query → 缺查询提示）
 ```
 
 ### 4.3 配置新增（`app/config.py` / `.env.example`）
@@ -217,23 +221,23 @@ flowchart TD
 8. 食材联想向量兜底：`index_ingredients.py` + 路由改造 + 测试。
 9. 评测与性能：`seed_synthetic_recipes.py` + `eval_retrieval.py`（50 条用例 + 单路对比）；1k/5k 合成数据记录 BM25 构建与查询耗时基线。
 10. 鲁棒性：检索超时与并发锁、输入上限校验、孤儿块清理脚本 + 故障注入测试（mock Chroma/嵌入/MySQL 故障）。
-11. 文档同步（PLAN.md 阶段状态、README、DB.md 无需改表）→ 全量测试跑绿 → 回填第 9 节验收结果。
+11. 文档同步（PLAN.md 阶段状态、README、DB.md 同步 updated_at）→ 全量测试跑绿 → 回填第 9 节验收结果。
 
 ## 7. 测试与验收门禁
 
 ### 7.1 功能测试
 
 - **BM25**：bigram 分词正确（“土豆鸡蛋”与“鸡蛋土豆”命中同一批）；中文关键词“土豆”能召回含别名“马铃薯”的菜谱（语料含别名）；语料为空返回空。
-- **向量聚合**：FakeEmbeddings + 临时 Chroma，多块菜谱按 `source_url` 聚合取最优分；`query` 无结果返回空。
-- **RRF 融合**：仅 BM25 / 仅向量 / 双路命中时排序符合 `k=60` 预期；去重无重复 `recipe_id`。
-- **降级**：无 `EMBEDDING_API_KEY` 或 Chroma 空 → 仅 BM25 且 `degraded=True`；嵌入抛错不 500。
+- **向量聚合**：FakeEmbeddings + 临时 Chroma，多块菜谱按 `source_url` 聚合成块级 RRF 证据均值（[1,200,300] 排于 [2,3,4] 之后）；距离只决胜、不进分数；距离阈值过滤噪声。
+- **RRF 融合不变量**：`rrf([1],k,w)==w/(k+1)`；两路同位次融合恰为单路两倍；空证据贡献 0；权重和不为 1 配置报错；去重无重复 `recipe_id`。
+- **向量路四态**：跳过/失败（无 key、集合空、异常）→ 仅 BM25 + `degraded=True`；成功但 0 命中 → 仅 BM25 + `degraded=False`；部分孤儿 → 保留有效 + WARN；全部孤儿 → 整路丢弃 + `degraded=True`。
 - **缺料**：调料不参与缺料；别名命中不算缺；全覆盖 → `missing_ingredients=[]`；`essential_total=0` 不惩罚。
 - **评分**：覆盖度优先（缺 0 料 > 缺 1 料）；`exclude_tags` 命中剔除；权重配置生效。
 - **API**：`/api/recipes/search` 返回结构正确；`ingredients`/`exclude_tags` 逗号解析；空结果带 `notice`；`/search` 与 `/{recipe_id}` 路由不冲突（`/search` 不被吞）。
-- **LangGraph**：`build_graph()` 跑“retrieve → rank”部分流程，`state.candidates/ranked` 有值且按分降序。
+- **LangGraph**：`build_graph()` 跑“retrieve → rank”部分流程，`state.candidates/ranked` 有值且按分降序；断言 `retrieve_node` 以 `state.query` 为检索文本（而非食材拼接）；`query` 为空 → 空候选 + notice。
 - **食材联想向量兜底**：LIKE 不足时向量补充合并去重；向量不可用时回退 LIKE-only，响应形状不变。
 - **评测脚本**：50 条合成用例，`recall@5 ≥ 0.7`、混合 ≥ 单路（BM25-only 或 vector-only）为 P2 基线。
-- **故障注入（鲁棒性门禁）**：mock Chroma.query 抛错 → 仅 BM25 + `degraded`；mock 嵌入抛错/无 key → 同上；MySQL 断连 → 503 + `notice` 不崩溃；BM25 语料为空 → 空结果 + `notice`；孤儿块（Chroma 有、MySQL 无）→ 丢弃 + WARN。
+- **故障注入（鲁棒性门禁）**：mock Chroma.query 抛错 → 仅 BM25 + `degraded`；mock 嵌入抛错/无 key → 同上；MySQL 断连 → 503 + `notice` 不崩溃；BM25 语料为空 → 空结果 + `notice`（`degraded=False`）；语料重建失败四态（旧缓存回退 / 无缓存 MySQL 503 / 无缓存非 MySQL 空结果）；孤儿块丢弃 + WARN；Core `update()` 批量改标题后 `updated_at` 探针变化触发重建。
 - **边界与并发**：`essential_total=0`、融合 max=0、分数并列排序稳定；超长 `q`、30+ 食材、非法字符 → 400；10 并发请求检索不报错并记录 P95；`cleanup_orphan_chunks.py` 的 dry-run / 真实删除在临时 Chroma 上幂等。
 
 ### 7.2 性能门禁（本机基线，记录不设硬阈值，全量压测归 P5）
@@ -257,11 +261,15 @@ uv run python scripts/seed_dictionary.py
 uv run pytest
 uv run python scripts/seed_synthetic_recipes.py --count 50     # 合成评测数据
 uv run python scripts/eval_retrieval.py                        # recall@5 / 单路对比
+uv run python scripts/eval_retrieval.py --fake-vector          # 离线混合对比（伪向量 1024 维）
+uv run python scripts/eval_retrieval.py --bench-rows 5000      # 构建/查询耗时基线
 uv run uvicorn app.main:app
 # 浏览器 / curl：GET /api/recipes/search?q=土豆%20鸡蛋&ingredients=土豆,鸡蛋&limit=10
 ```
 
-全部通过即 P2 完成；结果回填第 9 节。
+> 阿里云百炼 embedding 单批上限 20：`.env` 设 `EMBEDDING_BATCH_SIZE=20` 后再跑真实嵌入类命令。
+
+全部通过即 P2 完成；结果已回填第 9 节。
 
 ## 8. 假设
 

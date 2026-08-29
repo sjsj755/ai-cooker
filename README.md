@@ -114,7 +114,6 @@ FLUSH PRIVILEGES;
 
 详见 [docs/PLAN.md](docs/PLAN.md) 第 8.8 节“复盘：已知不足与整改”。要点：
 
-- 性能基线（P95）与 API 限流尚未自动化，归入 P5；
-- `/health` 建议在 P1 前拆分 liveness / readiness；
+- API 限流与全量压测尚未自动化，归入 P5（P0/P1 手工基线、P2 检索 1k/5k 基线已记录）；
 - 测试库 `ai_cooker_test` 需 root 预建并授权；
 - 首次 `uv sync` / `uv audit` 需要外网访问。
