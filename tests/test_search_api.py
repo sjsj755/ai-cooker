@@ -54,7 +54,13 @@ def _isolated_corpus(urls: set[str]) -> BM25Corpus:
 
 @pytest.fixture()
 def search_env(tmp_path):
-    rid = add_recipe(UNIQUE, URL, ingredients=["土豆", "鸡蛋"], tags=["家常菜"])
+    rid = add_recipe(
+        UNIQUE,
+        URL,
+        ingredients=["土豆", "鸡蛋"],
+        seasonings=[("盐", "适量")],
+        tags=["家常菜"],
+    )
     chroma = _seed_chroma(tmp_path, URL, UNIQUE)
     service = RankingService(
         retriever=HybridRetriever(
@@ -153,3 +159,34 @@ def test_search_route_not_shadowed_by_detail(client, search_env):
     assert detail.status_code == 200
     search = client.get("/api/recipes/search", params={"q": UNIQUE})
     assert search.status_code == 200
+
+
+def test_detail_returns_ingredients_and_seasonings(client, search_env):
+    """详情接口：食材 / 调料按 category='调料' 拆分，用量随条目返回。"""
+    resp = client.get(f"/api/recipes/{search_env}")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == search_env
+    assert [i["name"] for i in body["ingredients"]] == ["土豆", "鸡蛋"]
+    assert all(i["amount"] is None for i in body["ingredients"])
+    assert [(s["name"], s["amount"]) for s in body["seasonings"]] == [("盐", "适量")]
+    # 既有字段不受影响
+    assert body["title"] == UNIQUE
+    assert body["difficulty"] == 1
+    assert body["cook_time_minutes"] == 20
+    assert "steps" in body
+    assert "description" in body
+    assert "source_url" in body
+
+
+def test_detail_empty_lists_when_no_ingredient_rows(client):
+    url = "https://test.search/empty"
+    rid = add_recipe("无用料菜", url, ingredients=[], seasonings=[], tags=[])
+    try:
+        resp = client.get(f"/api/recipes/{rid}")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ingredients"] == []
+        assert body["seasonings"] == []
+    finally:
+        delete_recipe(url)

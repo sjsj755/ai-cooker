@@ -16,9 +16,14 @@ TITLE = "生成测试土豆鸡蛋菜"
 STEPS = [{"instruction": "土豆切块", "minutes": 5}]
 
 
-def _seed_recipe(steps=STEPS):
+def _seed_recipe(steps=STEPS, seasonings=()):
     rid = add_recipe(
-        TITLE, URL, ingredients=["土豆", "鸡蛋"], tags=["家常菜"], steps=steps
+        TITLE,
+        URL,
+        ingredients=["土豆", "鸡蛋"],
+        seasonings=seasonings,
+        tags=["家常菜"],
+        steps=steps,
     )
     return rid
 
@@ -255,5 +260,50 @@ def test_generate_no_ranked_returns_empty_notice(monkeypatch):
         result = _run(generate_node(empty_state()))
         assert result["recommendations"] == []
         assert result["notice"] == "未找到匹配菜谱，可补充食材或放宽忌口"
+    finally:
+        delete_recipe(URL)
+
+
+def test_generate_success_backfills_seasonings_from_mysql(monkeypatch):
+    """成功路径：调料以 MySQL 为准回填（LLM 伪造的 seasonings 一律覆盖）。"""
+    rid = _seed_recipe(seasonings=[("盐", "适量"), ("食用油", "少许")])
+    try:
+        llm = FakeLLM(
+            parse_items=[("土豆",)],
+            recommendation_set=RecommendationSet(
+                recommendations=[
+                    Recommendation(
+                        recipe_id=rid,
+                        title="编造标题",
+                        match_score=99.9,
+                        missing_ingredients=["虚构缺料"],
+                        steps=[{"instruction": "LLM 步骤"}],
+                        tips="建议",
+                        seasonings=[{"name": "编造调料"}],
+                    )
+                ]
+            ),
+        )
+        monkeypatch.setattr("app.graph.nodes.get_llm_provider", lambda: llm)
+        result = _run(generate_node(_state(rid)))
+        rec = result["recommendations"][0]
+        assert [(s.name, s.amount) for s in rec.seasonings] == [
+            ("盐", "适量"),
+            ("食用油", "少许"),
+        ]
+    finally:
+        delete_recipe(URL)
+
+
+def test_generate_degrade_backfills_seasonings_from_mysql(monkeypatch):
+    """降级路径：MySQL 原文直出时同样回填调料。"""
+    rid = _seed_recipe(seasonings=["盐", "食用油"])
+    try:
+        llm = FakeLLM(parse_items=[("土豆",)], fail_generate=True)
+        monkeypatch.setattr("app.graph.nodes.get_llm_provider", lambda: llm)
+        result = _run(generate_node(_state(rid)))
+        rec = result["recommendations"][0]
+        assert [s.name for s in rec.seasonings] == ["盐", "食用油"]
+        assert all(s.amount is None for s in rec.seasonings)
     finally:
         delete_recipe(URL)

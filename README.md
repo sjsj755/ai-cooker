@@ -10,9 +10,9 @@
 
 Python 3.14 + uv · FastAPI · SQLAlchemy 2.x + Alembic · LangGraph · MySQL 8.x（InnoDB + utf8mb4）· pytest
 
-## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）→ P2 检索层（已完成）→ P3 LangGraph 工作流（已完成，2026-08-29 验收通过）→ P4 前端（已完成，2026-08-29 验收通过：191 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_PLAN.md](docs/P4_PLAN.md)）
+## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）→ P2 检索层（已完成）→ P3 LangGraph 工作流（已完成，2026-08-29 验收通过）→ P4 前端（已完成，2026-08-29 验收通过：191 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_PLAN.md](docs/P4_PLAN.md)）→ P4.1 前端视觉与交互优化（已完成，2026-08-29 验收通过：194 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md)）→ P4.2 推荐页详情抽屉 + 食材/调料区分 + 感知性能优化（已完成，2026-08-29 验收通过：200 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_2_PLAN.md](docs/P4_2_PLAN.md)）
 
-P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档见 [docs/P1_COLLECTION_DESIGN.md](docs/P1_COLLECTION_DESIGN.md)；P2 检索层实施计划见 [docs/P2_PLAN.md](docs/P2_PLAN.md)；P3 LangGraph 工作流实施计划见 [docs/P3_PLAN.md](docs/P3_PLAN.md)；P4 前端实施计划见 [docs/P4_PLAN.md](docs/P4_PLAN.md)。
+P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档见 [docs/P1_COLLECTION_DESIGN.md](docs/P1_COLLECTION_DESIGN.md)；P2 检索层实施计划见 [docs/P2_PLAN.md](docs/P2_PLAN.md)；P3 LangGraph 工作流实施计划见 [docs/P3_PLAN.md](docs/P3_PLAN.md)；P4 前端实施计划见 [docs/P4_PLAN.md](docs/P4_PLAN.md)；P4.1 前端视觉与交互优化实施计划见 [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md)。
 
 ### P1（parse）交付物
 
@@ -78,6 +78,22 @@ uv run python scripts/crawl_recipes.py --site xiachufang --stage ingest
 - 请求层 `api.js` 的 `createTaskRegistry`：按任务类型（`tags` / `autocomplete` / `recommend` / `search` / `detail`）维护 AbortController，重试先中断在途请求（幂等）、默认 5s 超时（`recommend` 任务 30s，适配真实 LLM 波动）、AbortError 分类（主动中断静默 / 超时与断网与 5xx 附重试按钮）；业务状态由页面脚本持有，`ui.js` 无状态渲染（全 `createElement` + `textContent` 防 XSS）
 - 配置：`FRONTEND_DIR=./frontend`（`app/config.py`）；`app/main.py` 在 `include_router` 之后挂载 StaticFiles，`/api/*`、`/docs` 不受影响
 - 6 条 Playwright 冒烟脚本（`scripts/e2e/`，`E2E_BASE_URL` 默认 `http://127.0.0.1:8000`）；`tests/test_frontend.py` 10 用例（静态路由 / 资源完整性 / 安全扫描 / 调用契约 / label for 匹配）；全量 191 测试通过
+
+### P4.1（前端视觉与交互优化 · 已完成）
+
+- 纯净浅色 + 暖橙设计令牌（`#fafaf8` 底 / 纯白表面 / `#d9772e` 主色），收敛多色面板（仅降级横幅与错误保留语义色），统一圆角与柔和阴影
+- 推荐卡做法步骤折叠：一次只展开一张；`hidden` 容器常驻 + 全量重建 + `data-toggle-id` 焦点恢复（`focus({ preventScroll: true })`）+ `aria-expanded`/`aria-controls` 同步；ui.js 保持无状态
+- 详情抽屉打开聚焦关闭按钮 + `drawer-open` 锁定页面滚动，关闭恢复焦点到触发元素；按钮 `.is-loading` 加载态 + `aria-busy`；文案精简、移除页脚、新增 `favicon.svg`
+- 同步更新 `tests/test_frontend.py`（新增 favicon 资源完整性 + 折叠/抽屉静态契约 3 用例）与 `smoke_recommend_happy.py`（点击“做法”后断言步骤可见 / `aria-expanded="true"` / 按钮聚焦）；全量 194 测试全绿 + 6 条 Playwright 冒烟通过
+
+### P4.2（推荐页详情抽屉 + 食材/调料区分 + 感知性能优化 · 已完成）
+
+- 推荐页复刻搜索页“查看详情”抽屉：推荐卡新增「所需调料」行与「查看详情」按钮，点击弹出抽屉（ESC / 遮罩 / × 关闭、滚动锁定、焦点恢复与搜索页一致）
+- 抽取 `frontend/js/createDetailDrawerManager.js`：两页共用抽屉状态机（缓存 / 防重发 / 切换 abort / 焦点恢复 / 清空）统一由工厂管理，`destroy` 生命周期杜绝 keydown 监听累积
+- 全站详情区分「所需食材」与「调料」（名称 + 用量）；`Recommendation.seasonings` 与 `RecipeOut.ingredients/seasonings` 由 MySQL 回填（以事实为准、不信 LLM）；调料判定与缺料计算一致（`category=='调料'`），详情 JOIN 经 EXPLAIN 验证走主键索引
+- 感知性能优化：打开抽屉立即渲染骨架 + 加载圆环（复用 `.is-loading` 动画），数据返回后替换内容；推荐卡折叠改为数据未变时增量切换 `hidden` / `aria-expanded`（`lastRenderedResults` 引用浅比较），仅数据变化才全量重建
+- 交付后修复：匹配度徽章改为按本批最高分归一化展示（`match_score` 是 RRF 融合分、绝对量纲极小，此前真实数据全部显示 1%），推荐 / 搜索两页共用，后端契约不变
+- 全量 200 测试全绿 + 6 条 Playwright 冒烟通过；视觉截图 `.tmp_bridge/p4_2_*.png` 供浏览器复核
 
 当前文档记录的 P0 交付物：
 

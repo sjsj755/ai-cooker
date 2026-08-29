@@ -23,10 +23,11 @@ from app.db.session import SessionLocal
 from app.graph.linking import IngredientLinker, get_ingredient_linker
 from app.graph.prompts import generate_prompt, parse_prompt
 from app.graph.state import CookState, ParsedIngredient, Recommendation
-from app.models import Recipe
+from app.models import Ingredient, Recipe, RecipeIngredient
 from app.retrieval.errors import RetrievalUnavailableError
 from app.retrieval.ranking import EMPTY_RESULT_NOTICE, get_ranking_service
 from app.schemas.recommend import IngredientExtractionList, RecommendationSet
+from app.schemas.recipes import IngredientItem
 
 logger = get_logger("app.graph")
 
@@ -337,6 +338,14 @@ async def _validate_recommendations(
             raise RetrievalUnavailableError(
                 f"回填菜谱步骤失败: {type(exc).__name__}: {exc}"
             ) from exc
+    try:
+        seasonings_map = await asyncio.to_thread(
+            _load_seasonings, [c.recipe_id for c, _ in valid]
+        )
+    except Exception as exc:  # noqa: BLE001 - 回填失败即视为检索不可用
+        raise RetrievalUnavailableError(
+            f"回填菜谱调料失败: {type(exc).__name__}: {exc}"
+        ) from exc
     final: list[Recommendation] = []
     for candidate, rec in sorted(valid, key=lambda pair: order[pair[0].recipe_id]):
         steps = rec.steps
@@ -356,6 +365,7 @@ async def _validate_recommendations(
                 cook_time_minutes=candidate.cook_time_minutes,
                 steps=steps,
                 tips=rec.tips,
+                seasonings=seasonings_map.get(candidate.recipe_id, []),
             )
         )
     return {
@@ -373,6 +383,7 @@ async def _degrade_recommendations(
     ids = [c.recipe_id for c in ranked]
     try:
         rows = await asyncio.to_thread(_load_recipes, ids)
+        seasonings_map = await asyncio.to_thread(_load_seasonings, ids)
     except Exception as exc:  # noqa: BLE001 - 降级路径 MySQL 失败 → 503
         raise RetrievalUnavailableError(
             f"降级路径读取菜谱失败: {type(exc).__name__}: {exc}"
@@ -392,6 +403,7 @@ async def _degrade_recommendations(
                 cook_time_minutes=row["cook_time_minutes"],
                 steps=row["steps"],
                 tips=None,
+                seasonings=seasonings_map.get(cand.recipe_id, []),
             )
         )
     return {
@@ -434,3 +446,29 @@ def _load_steps(recipe_ids: list[int]) -> dict[int, list[dict] | None]:
             select(Recipe.id, Recipe.steps).where(Recipe.id.in_(recipe_ids))
         ).all()
     return {r.id: r.steps for r in rows}
+
+
+def _load_seasonings(recipe_ids: list[int]) -> dict[int, list[IngredientItem]]:
+    """按 category='调料' 一次性回填所需调料（保持 ingredient_id 顺序，确定性输出）。"""
+    if not recipe_ids:
+        return {}
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(
+                RecipeIngredient.recipe_id,
+                Ingredient.name,
+                RecipeIngredient.amount,
+            )
+            .join(Ingredient, Ingredient.id == RecipeIngredient.ingredient_id)
+            .where(
+                RecipeIngredient.recipe_id.in_(recipe_ids),
+                Ingredient.category == "调料",
+            )
+            .order_by(RecipeIngredient.ingredient_id)
+        ).all()
+    result: dict[int, list[IngredientItem]] = {}
+    for recipe_id, name, amount in rows:
+        result.setdefault(recipe_id, []).append(
+            IngredientItem(name=name, amount=amount)
+        )
+    return result

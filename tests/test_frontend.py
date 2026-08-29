@@ -75,6 +75,23 @@ def test_all_page_assets_exist_and_nonempty(client):
             assert path.stat().st_size > 0, f"{page} 引用的资源为空: {asset}"
 
 
+def test_favicon_exists_and_referenced():
+    """favicon 资源完整性：文件存在且非空，两页 HTML 均显式引用。"""
+    favicon = FRONTEND_DIR / "favicon.svg"
+    assert favicon.is_file(), "frontend/favicon.svg 缺失"
+    assert favicon.stat().st_size > 0, "frontend/favicon.svg 为空"
+    for page_file in ("index.html", "search.html"):
+        html = (FRONTEND_DIR / page_file).read_text(encoding="utf-8")
+        assert 'href="favicon.svg"' in html, f"{page_file} 未引用 favicon.svg"
+        assert 'type="image/svg+xml"' in html, f"{page_file} favicon 缺 type 属性"
+
+
+def test_index_has_drawer_root():
+    """推荐主页抽屉容器（P4.2 查看详情）。"""
+    html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
+    assert 'id="detail-drawer-root"' in html
+
+
 def test_label_for_targets_exist():
     """每个 <label for> 都必须指向真实元素 id（静态或动态 chip 输入框）。"""
     import re
@@ -96,6 +113,63 @@ def test_label_for_targets_exist():
     assert 'id: "ingredient-input"' in _read_js("recommend.js")
     assert 'id: "search-ingredient-input"' in _read_js("search.js")
     assert "opts.id" in _read_js("ui.js")
+
+
+# ---------- P4.1 静态契约 ----------
+
+
+def test_collapse_aria_and_focus_contract():
+    """P4.1 折叠契约：ui.js 处理 hidden / aria-expanded / data-toggle-id；
+    recommend.js 传入 expandedId 且含 preventScroll 焦点恢复（锁定无状态 + aria 同步 + 焦点保持）。"""
+    ui_js = _read_js("ui.js")
+    recommend_js = _read_js("recommend.js")
+
+    # ui.js：展开容器常驻 hidden + aria 同步 + 稳定 data-toggle-id + 折叠回调入参
+    assert "hidden" in ui_js
+    assert "aria-expanded" in ui_js
+    assert "aria-controls" in ui_js
+    assert "data-toggle-id" in ui_js
+    assert "onToggleSteps" in ui_js
+
+    # recommend.js：展开状态由页面脚本持有（expandedCardId），渲染传入 expandedId，
+    # 全量重建后按 data-toggle-id 恢复焦点（preventScroll）
+    assert "expandedCardId" in recommend_js
+    assert "expandedId" in recommend_js
+    assert "preventScroll" in recommend_js
+
+
+def test_drawer_manager_contract():
+    """P4.2 抽屉管理器契约：状态机在 createDetailDrawerManager.js，两页均实例化。"""
+    manager_js = _read_js("createDetailDrawerManager.js")
+    ui_js = _read_js("ui.js")
+    recommend_js = _read_js("recommend.js")
+    search_js = _read_js("search.js")
+
+    assert "detailCache" in manager_js
+    assert "openedDetailId" in manager_js
+    assert "detailTrigger" in manager_js
+    assert "isConnected" in manager_js
+    assert "drawer-open" in manager_js
+    assert "/api/recipes/${recipeId}" in manager_js
+    assert "createDetailDrawerManager(" in recommend_js
+    assert "createDetailDrawerManager(" in search_js
+    # ui.js 仍负责抽屉外壳（滚动锁定 + 聚焦关闭按钮）
+    assert "drawer-open" in ui_js
+    assert "closeBtn.focus" in ui_js
+
+
+def test_loading_skeleton_and_seasonings_contract():
+    """P4.2 感知性能与用料契约：ui.js 加载骨架 / 食材调料区块；recommend.js 增量折叠。"""
+    ui_js = _read_js("ui.js")
+    recommend_js = _read_js("recommend.js")
+
+    assert "renderDrawerLoading" in ui_js
+    assert "spinner" in ui_js
+    assert "drawer-ingredients" in ui_js
+    assert "drawer-seasonings" in ui_js
+    assert "seasonings" in ui_js
+    assert "lastRenderedResults" in recommend_js
+    assert "preventScroll" in recommend_js
 
 
 # ---------- 静态安全扫描 ----------
@@ -147,9 +221,8 @@ def test_frontend_api_paths_match_backend_contract():
     assert "/api/ingredients/search" in recommend_js
     assert "/api/tags" in recommend_js
 
-    # 搜索页：检索 / 详情 / 联想 / 标签
+    # 搜索页：检索 / 联想 / 标签（详情路径在 createDetailDrawerManager.js 断言）
     assert "/api/recipes/search" in search_js
-    assert "/api/recipes/${recipeId}" in search_js
     assert "/api/ingredients/search" in search_js
     assert "/api/tags" in search_js
 
@@ -157,6 +230,8 @@ def test_frontend_api_paths_match_backend_contract():
     assert "createTaskRegistry" in api_js
     assert "AbortController" in api_js
     assert "REQUEST_TIMEOUT_MS" in api_js
+    # 抽屉管理器封装详情请求路径
+    assert "/api/recipes/${recipeId}" in _read_js("createDetailDrawerManager.js")
 
     # 与后端路由表比对：契约路径全部在 OpenAPI 中注册
     from app.main import app

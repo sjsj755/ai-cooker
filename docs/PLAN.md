@@ -2,7 +2,7 @@
 
 > 基于已有食材的菜谱推荐系统。本文档固化当前架构决策、流程图、兜底策略、测试门禁与 P0 实施计划，作为后续实现与扩展的唯一依据。
 
-**阶段状态：P0 已完成（2026-08-28 验收通过）→ P1 已完成（parse + ingest + 真实嵌入验收，2026-08-29 验收通过；实施计划与验收结果见 [docs/P1_PLAN.md](P1_PLAN.md)）→ P2 检索层已完成（BM25 + 向量 + RRF + 缺料/评分 + search API + LangGraph 节点 + 食材向量库，2026-08-29 验收通过；实施计划与验收结果见 [docs/P2_PLAN.md](P2_PLAN.md)）→ P3 LangGraph 工作流已完成（LLM 识别 + 四级映射 + 检索排序 + 推荐生成 + recommend API，2026-08-29 验收通过；实施计划与验收结果见 [docs/P3_PLAN.md](P3_PLAN.md)）→ P4 前端已完成（原生 HTML/CSS/JS + 推荐/搜索页 + 任务级幂等重试 + Playwright 冒烟，2026-08-29 验收通过；实施计划与验收结果见 [docs/P4_PLAN.md](P4_PLAN.md)）。**
+**阶段状态：P0 已完成（2026-08-28 验收通过）→ P1 已完成（parse + ingest + 真实嵌入验收，2026-08-29 验收通过；实施计划与验收结果见 [docs/P1_PLAN.md](P1_PLAN.md)）→ P2 检索层已完成（BM25 + 向量 + RRF + 缺料/评分 + search API + LangGraph 节点 + 食材向量库，2026-08-29 验收通过；实施计划与验收结果见 [docs/P2_PLAN.md](P2_PLAN.md)）→ P3 LangGraph 工作流已完成（LLM 识别 + 四级映射 + 检索排序 + 推荐生成 + recommend API，2026-08-29 验收通过；实施计划与验收结果见 [docs/P3_PLAN.md](P3_PLAN.md)）→ P4 前端已完成（原生 HTML/CSS/JS + 推荐/搜索页 + 任务级幂等重试 + Playwright 冒烟，2026-08-29 验收通过；实施计划与验收结果见 [docs/P4_PLAN.md](P4_PLAN.md)）→ P4.1 前端视觉与交互优化已完成（纯净浅色 + 暖橙设计令牌、推荐卡做法折叠 + 焦点保持、抽屉焦点/滚动锁定、favicon，2026-08-29 验收通过：194 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_1_PLAN.md](P4_1_PLAN.md)）→ P4.2 推荐页详情抽屉 + 食材/调料区分 + 感知性能优化已完成（推荐页复刻搜索页详情抽屉、抽取 `createDetailDrawerManager.js` 统一抽屉状态机、卡片所需调料行与抽屉食材/调料区块、打开抽屉即渲染加载骨架、折叠增量更新替代全量重建，2026-08-29 验收通过：200 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_2_PLAN.md](P4_2_PLAN.md)）。**
 
 ## 1. 项目概述
 
@@ -194,6 +194,8 @@ flowchart LR
 - **P2 检索层**：`HybridRetriever`（BM25 + 向量）+ 默认 `ScoringStrategy`，验证召回质量与耗时基线。**✅ 已完成（2026-08-29），实施计划与验收结果见 [docs/P2_PLAN.md](P2_PLAN.md)。**
 - **P3 LangGraph 工作流**：LLM 识别节点（复用 `OpenAICompatibleLLM`）+ 完整图 + 兜底分支 + 结构化生成 + 推荐 API。**✅ 已完成（2026-08-29），实施计划与验收结果见 [docs/P3_PLAN.md](P3_PLAN.md)。**
 - **P4 前端**：FastAPI 同源托管原生前端——推荐主页 `/`（食材输入 + 联想、忌口选择、推荐卡片、降级提示展示）、独立搜索页 `/search.html`（复用 P2 search API + 详情抽屉）、任务级 AbortController 幂等重试（默认 5s 超时 / recommend 30s，`recommend.js: {tags, autocomplete, recommend}` / `search.js: {tags, autocomplete, search, detail}`）、6 条 Playwright 冒烟脚本。**✅ 已完成（2026-08-29），191 测试全绿 + 6 条冒烟通过，实施计划与验收结果见 [docs/P4_PLAN.md](P4_PLAN.md)。**
+- **P4.1 前端视觉与交互优化**：纯净浅色 + 暖橙设计令牌；推荐卡做法步骤折叠（一次一张，全量重建 + `hidden` 常驻 + `data-toggle-id` 焦点恢复 + `aria-expanded` 同步）；详情抽屉焦点 / 滚动锁定；按钮加载态、文案精简、移除页脚、favicon。**✅ 已完成（2026-08-29），194 测试全绿 + 6 条冒烟通过，实施计划与验收结果见 [docs/P4_1_PLAN.md](P4_1_PLAN.md)。**
+- **P4.2 推荐页详情抽屉 + 食材/调料区分 + 感知性能优化**：推荐页复刻搜索页“查看详情”抽屉，抽取 `createDetailDrawerManager.js` 统一两页抽屉状态机（缓存 / 防重发 / 切换 abort / 焦点恢复 / 清空）；推荐卡新增「所需调料」行，详情抽屉区分「所需食材」与「调料」（名称 + 用量）；`Recommendation.seasonings` 与 `RecipeOut.ingredients/seasonings` 由 MySQL 回填（EXPLAIN 已验证走主键索引）；打开抽屉立即渲染加载骨架（复用 `.is-loading` 圆环）；折叠改为数据未变时增量切换 `hidden` / `aria-expanded`、仅数据变化才全量重建；交付后修复匹配度徽章按本批最高分归一化展示（`match_score` 为 RRF 融合分，直接 `×100` 会全部显示 1%）。**✅ 已完成（2026-08-29），200 测试全绿 + 6 条冒烟通过，实施计划与验收结果见 [docs/P4_2_PLAN.md](P4_2_PLAN.md)。**
 - **P5 全量验收**：端到端压测、安全回归、LangSmith 评测、扩展点文档。
 
 ## 8. P0 实施计划（已完成 · 2026-08-28）

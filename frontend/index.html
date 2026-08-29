@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AI 厨师 · 菜谱推荐</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -20,7 +21,7 @@
   <main class="container">
     <section class="hero">
       <h1>今天想吃什么？</h1>
-      <p>输入家里已有的食材，为你推荐缺料最少、最可行的菜谱。</p>
+      <p>输入家里已有的食材，一键推荐缺料最少的菜谱。</p>
     </section>
 
     <section class="panel" aria-label="推荐设置">
@@ -28,13 +29,13 @@
         <label for="ingredient-input">已有食材</label>
         <div id="ingredient-chips"></div>
         <div class="suggest-wrap" id="ingredient-suggest"></div>
-        <p class="hint">输入后回车添加，或从联想中选择；最多 30 项，每项不超过 50 字。</p>
+        <p class="hint">回车添加，最多 30 项</p>
       </div>
 
       <div class="field">
         <label>忌口 / 口味（可选）</label>
         <div id="tags-picker"></div>
-        <p class="hint">最多选择 20 项；推荐结果将过滤所选标签。</p>
+        <p class="hint">最多 20 项</p>
       </div>
 
       <div class="actions">
@@ -52,14 +53,11 @@
     </section>
   </main>
 
-  <footer class="site-footer">
-    <div class="container">
-      <p>AI 厨师 · 基于已有食材的菜谱推荐系统</p>
-    </div>
-  </footer>
+  <div id="detail-drawer-root"></div>
 
   <script src="js/api.js" defer></script>
   <script src="js/ui.js" defer></script>
+  <script src="js/createDetailDrawerManager.js" defer></script>
   <script src="js/recommend.js" defer></script>
 </body>
 </html>

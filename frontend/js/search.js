@@ -24,8 +24,6 @@
   let limit = 10;
   let pending = false;
   let debounceTimer = null;
-  let detailCache = new Map(); // recipe_id -> 详情数据（重复点击不重复请求）
-  let openedDetailId = null; // 当前打开抽屉的菜谱 id（关闭时置空）
 
   const els = {
     chips: document.getElementById("search-ingredient-chips"),
@@ -41,6 +39,11 @@
     empty: document.getElementById("search-results-empty"),
     drawerRoot: document.getElementById("detail-drawer-root"),
   };
+
+  const detail = createDetailDrawerManager({
+    registry,
+    drawerRoot: els.drawerRoot,
+  });
 
   // ---- 工具 ----
   function normalizeIngredient(text) {
@@ -100,7 +103,13 @@
       onToggle: toggleTag,
     });
     els.searchBtn.disabled = pending;
+    els.searchBtn.classList.toggle("is-loading", pending);
     els.searchBtn.textContent = pending ? "搜索中…" : "搜索";
+    if (pending) {
+      els.searchBtn.setAttribute("aria-busy", "true");
+    } else {
+      els.searchBtn.removeAttribute("aria-busy");
+    }
   }
 
   // ---- 食材 chips ----
@@ -269,7 +278,7 @@
           notice: payload.notice,
         });
         UI.renderCards(els.cards, payload.recipes || [], {
-          onDetail: openDetail,
+          onDetail: (recipe) => detail.open(recipe),
         });
         if (!payload.recipes || payload.recipes.length === 0) {
           UI.renderEmpty(
@@ -300,76 +309,22 @@
     submitSearch();
   }
 
-  // ---- 详情抽屉 ----
-  function openDetail(recipe) {
-    const recipeId = recipe.recipe_id;
-    if (openedDetailId === recipeId) {
-      return; // 同一卡片重复点击不重复发请求
-    }
-    openedDetailId = recipeId;
-    registry.abort("detail"); // 切换卡片先中断在途详情请求
-    if (detailCache.has(recipeId)) {
-      UI.renderDetailDrawer(els.drawerRoot, detailCache.get(recipeId), {
-        onClose: closeDetail,
-      });
-      return;
-    }
-    fetchDetail(recipeId);
-  }
-
-  function fetchDetail(recipeId) {
-    registry
-      .run("detail", (signal) =>
-        Api.requestJson(`/api/recipes/${recipeId}`, { signal })
-      )
-      .then((data) => {
-        detailCache.set(recipeId, data);
-        // 防乱序覆盖：仅当当前打开目标仍是本次请求时才渲染
-        if (openedDetailId === recipeId) {
-          UI.renderDetailDrawer(els.drawerRoot, data, {
-            onClose: closeDetail,
-          });
-        }
-      })
-      .catch((err) => {
-        if (err.type === "aborted") {
-          return;
-        }
-        UI.renderError(els.drawerRoot, {
-          type: err.type,
-          message: err.message,
-          onRetry: () => {
-            if (openedDetailId === recipeId) {
-              fetchDetail(recipeId);
-            }
-          },
-        });
-      });
-  }
-
-  function closeDetail() {
-    openedDetailId = null;
-  }
-
   // ---- 清空 ----
   function clearAll() {
     registry.abort("search");
     registry.abort("autocomplete");
-    registry.abort("detail");
     chips = [];
     inputValue = "";
     suggestions = [];
     selectedTagIds = new Set();
     q = "";
     pending = false;
-    detailCache = new Map();
-    openedDetailId = null;
     clearFormError();
     els.banner.textContent = "";
     els.cards.textContent = "";
     els.empty.textContent = "";
     els.suggest.textContent = "";
-    els.drawerRoot.textContent = "";
+    detail.clear();
     renderAll();
   }
 

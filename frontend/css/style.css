@@ -1,25 +1,24 @@
-/* AI 厨师 前端样式（移动优先，无第三方资源） */
+/* AI 厨师 前端样式（移动优先，无第三方资源）
+   P4.1：纯净浅色 + 暖橙主色设计令牌；卡片折叠 / 按钮加载态 / 抽屉滚动锁定 */
 
 :root {
-  --color-bg: #f7f5f1;
+  --color-bg: #fafaf8;
   --color-surface: #ffffff;
-  --color-text: #2d2a26;
-  --color-muted: #6f6a63;
-  --color-primary: #c96f2e;
-  --color-primary-dark: #a95a24;
-  --color-border: #e3ddd3;
-  --color-warn-bg: #fff4d6;
-  --color-warn-border: #e8c36a;
-  --color-warn-text: #7a5b13;
-  --color-info-bg: #e7f0f7;
-  --color-info-border: #9fc2dd;
-  --color-info-text: #2d5778;
-  --color-error-bg: #fdecea;
-  --color-error-border: #e3a7a0;
+  --color-text: #1f1d1a;
+  --color-muted: #6b675f;
+  --color-border: #ece8e2;
+  --color-primary: #d9772e;
+  --color-primary-dark: #b85f1f;
+  --color-soft-bg: #f7f5f1;
+  --color-warn-bg: #fff7e0;
+  --color-warn-border: #f0d9a0;
+  --color-warn-text: #7a5b12;
+  --color-error-bg: #fdf0ee;
+  --color-error-border: #e8b8b1;
   --color-error-text: #9b3228;
-  --color-chip-bg: #efe9e0;
-  --radius: 10px;
-  --shadow: 0 1px 4px rgba(45, 42, 38, 0.08);
+  --radius-lg: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 2px rgba(31, 29, 26, 0.04), 0 2px 8px rgba(31, 29, 26, 0.05);
 }
 
 * {
@@ -36,6 +35,11 @@ body {
   color: var(--color-text);
   background: var(--color-bg);
   line-height: 1.6;
+}
+
+/* 抽屉打开时锁定页面滚动 */
+body.drawer-open {
+  overflow: hidden;
 }
 
 .container {
@@ -80,11 +84,11 @@ body {
 }
 
 .hero {
-  padding: 28px 0 12px;
+  padding: 24px 0 8px;
 }
 
 .hero h1 {
-  margin: 0 0 6px;
+  margin: 0 0 4px;
   font-size: 26px;
 }
 
@@ -96,7 +100,7 @@ body {
 .panel {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
   padding: 18px 16px;
   margin: 14px 0 20px;
@@ -117,7 +121,7 @@ body {
   width: 100%;
   padding: 9px 10px;
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   font-size: 15px;
   background: var(--color-surface);
   color: var(--color-text);
@@ -163,11 +167,12 @@ body {
 .btn {
   display: inline-block;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 9px 20px;
   font-size: 15px;
   cursor: pointer;
   text-decoration: none;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .btn.primary {
@@ -180,8 +185,39 @@ body {
 }
 
 .btn.primary:disabled {
-  background: #d8b99b;
+  background: #e8c8a8;
   cursor: not-allowed;
+}
+
+/* 按钮加载态：内联圆环伪元素（文案保留，如“推荐中… / 搜索中…”） */
+.btn.is-loading::after {
+  content: "";
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  margin-left: 8px;
+  vertical-align: -2px;
+  border: 2px solid rgba(255, 255, 255, 0.45);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 通用加载圆环（抽屉骨架等复用 .is-loading 的旋转动画） */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(31, 29, 26, 0.15);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
 }
 
 .btn.ghost {
@@ -198,7 +234,7 @@ body {
 /* chips 输入 */
 .chip-input {
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 7px 10px;
   background: var(--color-surface);
   display: flex;
@@ -226,9 +262,10 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: var(--color-chip-bg);
+  background: var(--color-soft-bg);
+  border: 1px solid var(--color-border);
   border-radius: 999px;
-  padding: 3px 10px;
+  padding: 2px 10px;
   font-size: 13px;
   max-width: 100%;
 }
@@ -266,7 +303,7 @@ body {
   z-index: 30;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   box-shadow: var(--shadow);
   max-height: 280px;
   overflow: auto;
@@ -285,7 +322,7 @@ body {
 
 .suggest-item:hover,
 .suggest-item:focus {
-  background: var(--color-chip-bg);
+  background: var(--color-soft-bg);
   outline: none;
 }
 
@@ -334,7 +371,7 @@ body {
 }
 
 .banner {
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 10px 14px;
   font-size: 14px;
 }
@@ -346,9 +383,9 @@ body {
 }
 
 .banner-info {
-  background: var(--color-info-bg);
-  border: 1px solid var(--color-info-border);
-  color: var(--color-info-text);
+  background: var(--color-soft-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-muted);
 }
 
 /* 结果卡片 */
@@ -359,31 +396,42 @@ body {
 .card {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow);
   padding: 16px;
   margin-bottom: 14px;
 }
 
+.card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
 .card-title {
-  margin: 0 0 8px;
+  margin: 0;
   font-size: 17px;
 }
 
-.card-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
 .badge {
-  background: var(--color-chip-bg);
+  flex-shrink: 0;
+  background: var(--color-soft-bg);
+  border: 1px solid var(--color-border);
   border-radius: 999px;
   padding: 2px 10px;
   font-size: 12px;
   color: var(--color-primary-dark);
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 8px;
 }
 
 .missing {
@@ -391,7 +439,7 @@ body {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  margin-bottom: 8px;
+  margin-bottom: 10px;
   font-size: 13px;
 }
 
@@ -404,27 +452,66 @@ body {
 }
 
 .chip-missing {
-  background: var(--color-info-bg);
-  color: var(--color-info-text);
+  background: var(--color-soft-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+
+/* 所需调料行（与缺料行同风格，调料 chips 中性化） */
+.seasonings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.seasonings-label {
+  color: var(--color-muted);
+}
+
+.chip-seasoning {
+  background: var(--color-soft-bg);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
 }
 
 .card-line {
-  margin: 2px 0;
   font-size: 13px;
   color: var(--color-muted);
 }
 
-.card-tips {
-  margin: 8px 0 0;
+/* 折叠：做法按钮 + 常驻 hidden 展开区 */
+.card-toggle {
+  padding: 6px 16px;
   font-size: 13px;
-  color: var(--color-info-text);
-  background: var(--color-info-bg);
-  border-radius: 8px;
-  padding: 8px 10px;
+  background: var(--color-soft-bg);
+  border-color: var(--color-border);
+  color: var(--color-primary-dark);
+}
+
+.card-toggle:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary-dark);
+}
+
+.card-toggle[aria-expanded="true"] {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+
+.recipe-steps-wrap {
+  margin-top: 10px;
+}
+
+.recipe-steps-wrap[hidden] {
+  display: none;
 }
 
 .recipe-steps {
-  margin: 10px 0 0;
+  margin: 0;
   padding-left: 22px;
 }
 
@@ -433,8 +520,25 @@ body {
   font-size: 14px;
 }
 
-.card .btn {
+.card-tips {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--color-muted);
+  background: var(--color-soft-bg);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
   margin-top: 12px;
+}
+
+.card-actions .btn {
+  margin-top: 0;
 }
 
 /* 错误 / 空态 */
@@ -442,7 +546,7 @@ body {
   background: var(--color-error-bg);
   border: 1px solid var(--color-error-border);
   color: var(--color-error-text);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   padding: 12px 14px;
   margin-bottom: 14px;
   display: flex;
@@ -468,14 +572,14 @@ body {
   padding: 28px 12px;
   background: var(--color-surface);
   border: 1px dashed var(--color-border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
 }
 
 /* 详情抽屉 */
 .drawer-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(31, 29, 26, 0.45);
   z-index: 50;
   display: flex;
   justify-content: flex-end;
@@ -524,10 +628,16 @@ body {
   cursor: pointer;
   color: var(--color-muted);
   padding: 0 4px;
+  border-radius: var(--radius-sm);
 }
 
 .drawer-close:hover {
   color: var(--color-error-text);
+}
+
+.drawer-close:focus {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 .drawer-body {
@@ -561,26 +671,38 @@ body {
   font-size: 14px;
 }
 
+.drawer-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  font-size: 14px;
+  color: var(--color-muted);
+}
+
+.drawer-amount {
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
 .drawer-source {
   display: inline-block;
   margin-top: 14px;
   color: var(--color-primary-dark);
 }
 
-.site-footer {
-  border-top: 1px solid var(--color-border);
-  color: var(--color-muted);
-  font-size: 13px;
-  padding: 18px 0 28px;
-}
-
-.site-footer p {
-  margin: 0;
+/* 键盘可见焦点（Tab 导航） */
+.btn:focus-visible,
+.suggest-item:focus-visible,
+.tag-item:focus-visible,
+.chip-remove:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 
 @media (min-width: 640px) {
   .hero {
-    padding: 40px 0 18px;
+    padding: 36px 0 14px;
   }
 
   .hero h1 {
@@ -599,5 +721,9 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .drawer {
     animation: none;
+  }
+
+  .btn.is-loading::after {
+    animation-duration: 1.4s;
   }
 }

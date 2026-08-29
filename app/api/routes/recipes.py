@@ -9,10 +9,15 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_db, get_ranking_service
 from app.core.logging import get_logger, log_event
-from app.models import Recipe
+from app.models import Ingredient, Recipe, RecipeIngredient
 from app.retrieval.errors import RetrievalUnavailableError
 from app.retrieval.ranking import RankingService
-from app.schemas.recipes import RecipeCandidateOut, RecipeOut, SearchResponse
+from app.schemas.recipes import (
+    IngredientItem,
+    RecipeCandidateOut,
+    RecipeOut,
+    SearchResponse,
+)
 
 router = APIRouter()
 logger = get_logger("app.api.recipes")
@@ -99,4 +104,41 @@ def get_recipe(recipe_id: int, db: Session = Depends(get_db)) -> RecipeOut:
     recipe = db.scalar(select(Recipe).where(Recipe.id == recipe_id))
     if recipe is None:
         raise HTTPException(status_code=404, detail="菜谱不存在")
-    return RecipeOut.model_validate(recipe)
+    ingredients, seasonings = _load_ingredients(db, recipe_id)
+    return RecipeOut(
+        id=recipe.id,
+        title=recipe.title,
+        source_url=recipe.source_url,
+        difficulty=recipe.difficulty,
+        cook_time_minutes=recipe.cook_time_minutes,
+        servings=recipe.servings,
+        steps=recipe.steps,
+        description=recipe.description,
+        ingredients=ingredients,
+        seasonings=seasonings,
+    )
+
+
+def _load_ingredients(
+    db: Session, recipe_id: int
+) -> tuple[list[IngredientItem], list[IngredientItem]]:
+    """查询菜谱用料，按 category=='调料' 拆分为 食材 / 调料（保持 join 顺序）。"""
+    rows = db.execute(
+        select(
+            Ingredient.name,
+            RecipeIngredient.amount,
+            Ingredient.category,
+        )
+        .join(Ingredient, Ingredient.id == RecipeIngredient.ingredient_id)
+        .where(RecipeIngredient.recipe_id == recipe_id)
+        .order_by(RecipeIngredient.ingredient_id)
+    ).all()
+    ingredients: list[IngredientItem] = []
+    seasonings: list[IngredientItem] = []
+    for name, amount, category in rows:
+        item = IngredientItem(name=name, amount=amount)
+        if category == "调料":
+            seasonings.append(item)
+        else:
+            ingredients.append(item)
+    return ingredients, seasonings

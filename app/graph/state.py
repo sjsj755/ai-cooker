@@ -9,6 +9,7 @@ last-value-wins 合并语义下未更新键（含 retry_count）由旧状态保�
 from pydantic import BaseModel, Field
 
 from app.core.retriever import RecipeCandidate
+from app.schemas.recipes import IngredientItem
 
 
 class ParsedIngredient(BaseModel):
@@ -23,7 +24,7 @@ class ParsedIngredient(BaseModel):
 
 
 class Recommendation(BaseModel):
-    """generate 节点最终推荐。"""
+    """generate 节点最终推荐；seasonings 由 MySQL 回填（以事实为准，不信 LLM）。"""
 
     recipe_id: int
     title: str
@@ -33,6 +34,7 @@ class Recommendation(BaseModel):
     cook_time_minutes: int | None = None
     steps: list[dict] | None = None
     tips: str | None = None
+    seasonings: list[IngredientItem] = Field(default_factory=list)
 
 
 class CookState(BaseModel):

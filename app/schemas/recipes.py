@@ -5,6 +5,13 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class IngredientItem(BaseModel):
+    """用料条目：食材或调料（含可选用量）。"""
+
+    name: str
+    amount: str | None = None
+
+
 class RecipeOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -16,6 +23,8 @@ class RecipeOut(BaseModel):
     servings: int | None = None
     steps: list[dict[str, Any]] | None = None
     description: str | None = None
+    ingredients: list[IngredientItem] = Field(default_factory=list)
+    seasonings: list[IngredientItem] = Field(default_factory=list)
 
 
 class RecipeCandidateOut(BaseModel):

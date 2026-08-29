@@ -31,6 +31,7 @@ def _seed_env(tmp_path):
         TITLE,
         URL,
         ingredients=["土豆", "鸡蛋"],
+        seasonings=[("盐", "适量"), ("食用油", "少许")],
         tags=["家常菜"],
         steps=STEPS,
     )
@@ -87,6 +88,7 @@ def test_recommend_200_with_mock_llm(client, tmp_path, monkeypatch):
                     missing_ingredients=[],
                     steps=[{"instruction": "LLM 步骤"}],
                     tips="少放盐",
+                    seasonings=[{"name": "编造调料"}],  # 事实字段：以 MySQL 为准
                 )
             ]
         ),
@@ -107,6 +109,11 @@ def test_recommend_200_with_mock_llm(client, tmp_path, monkeypatch):
         assert rec["title"] == TITLE
         assert rec["steps"] == [{"instruction": "LLM 步骤"}]
         assert rec["tips"] == "少放盐"
+        # LLM 伪造调料被 MySQL 覆盖，且键集含 seasonings
+        assert [(s["name"], s["amount"]) for s in rec["seasonings"]] == [
+            ("盐", "适量"),
+            ("食用油", "少许"),
+        ]
         assert set(rec) == {
             "recipe_id",
             "title",
@@ -116,6 +123,7 @@ def test_recommend_200_with_mock_llm(client, tmp_path, monkeypatch):
             "cook_time_minutes",
             "steps",
             "tips",
+            "seasonings",
         }
     finally:
         delete_recipe(URL)
@@ -141,6 +149,10 @@ def test_recommend_degrade_fills_steps_from_mysql(client, tmp_path, monkeypatch)
         assert rec["difficulty"] == 1
         assert rec["cook_time_minutes"] == 20
         assert rec["tips"] is None
+        assert [(s["name"], s["amount"]) for s in rec["seasonings"]] == [
+            ("盐", "适量"),
+            ("食用油", "少许"),
+        ]
     finally:
         delete_recipe(URL)
 

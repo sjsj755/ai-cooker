@@ -25,6 +25,9 @@
   let selectedTagIds = new Set(); // 忌口 / 口味选中 id
   let pending = false; // recommend 任务是否在途
   let debounceTimer = null;
+  let expandedCardId = null; // 当前展开做法的菜谱 id（一次只展开一张，null 为全部收起）
+  let results = []; // 最近一次推荐结果（折叠切换重渲染的数据源）
+  let lastRenderedResults = null; // 上次全量渲染的 results 引用（浅比较，数据未变则增量切换）
 
   const els = {
     chips: document.getElementById("ingredient-chips"),
@@ -36,7 +39,13 @@
     error: document.getElementById("results-error"),
     cards: document.getElementById("results-cards"),
     empty: document.getElementById("results-empty"),
+    drawerRoot: document.getElementById("detail-drawer-root"),
   };
+
+  const detail = createDetailDrawerManager({
+    registry,
+    drawerRoot: els.drawerRoot,
+  });
 
   // ---- 工具 ----
   function normalizeIngredient(text) {
@@ -96,7 +105,49 @@
       onToggle: toggleTag,
     });
     els.recommendBtn.disabled = pending;
+    els.recommendBtn.classList.toggle("is-loading", pending);
     els.recommendBtn.textContent = pending ? "推荐中…" : "推荐菜谱";
+    if (pending) {
+      els.recommendBtn.setAttribute("aria-busy", "true");
+    } else {
+      els.recommendBtn.removeAttribute("aria-busy");
+    }
+  }
+
+  // ---- 推荐卡片（展开状态由 expandedCardId 驱动；渲染为全量重建，ui.js 无状态） ----
+  function renderCards() {
+    lastRenderedResults = results;
+    UI.renderCards(els.cards, results, {
+      expandedId: expandedCardId,
+      onToggleSteps: toggleSteps,
+      onDetail: (recipe) => detail.open(recipe),
+    });
+  }
+
+  function toggleSteps(recipe) {
+    // 同卡再点收起，否则展开该卡（一次只展开一张）
+    const nextId =
+      expandedCardId === recipe.recipe_id ? null : recipe.recipe_id;
+    expandedCardId = nextId;
+    if (lastRenderedResults === results) {
+      // 数据未变（浅比较：引用相等，折叠不产生新数组）：只切换 hidden / aria-expanded，
+      // 避免长步骤卡片的全量重建开销；一次只展开一张、无中间态。
+      els.cards.querySelectorAll(".card-toggle").forEach((btn) => {
+        const id = Number(btn.getAttribute("data-toggle-id"));
+        const expanded = expandedCardId === id;
+        btn.setAttribute("aria-expanded", expanded ? "true" : "false");
+        const wrap = document.getElementById(`steps-${id}`);
+        if (wrap) {
+          wrap.hidden = !expanded;
+        }
+      });
+    } else {
+      renderCards();
+    }
+    // 全量重建后按稳定 data-toggle-id 恢复焦点，不落到 body
+    els.cards
+      .querySelector(`[data-toggle-id="${recipe.recipe_id}"]`)
+      ?.focus({ preventScroll: true });
   }
 
   // ---- 食材 chips ----
@@ -243,6 +294,8 @@
       return;
     }
     pending = true;
+    expandedCardId = null;
+    results = [];
     els.cards.textContent = "";
     els.empty.textContent = "";
     els.banner.textContent = "";
@@ -268,8 +321,9 @@
           degraded: !!payload.degraded,
           notice: payload.notice,
         });
-        UI.renderCards(els.cards, payload.recipes || []);
-        if (!payload.recipes || payload.recipes.length === 0) {
+        results = payload.recipes || [];
+        renderCards();
+        if (results.length === 0) {
           UI.renderEmpty(
             els.empty,
             payload.notice || "未找到匹配菜谱，试试补充食材或放宽忌口"
@@ -307,11 +361,15 @@
     suggestions = [];
     selectedTagIds = new Set();
     pending = false;
+    expandedCardId = null;
+    results = [];
+    lastRenderedResults = null;
     clearFormError();
     els.banner.textContent = "";
     els.cards.textContent = "";
     els.empty.textContent = "";
     els.suggest.textContent = "";
+    detail.clear();
     renderAll();
   }
 

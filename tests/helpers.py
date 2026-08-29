@@ -19,6 +19,17 @@ class _TestCrawler(RecipeCrawler):
         raise NotImplementedError
 
 
+def _as_crawled(items) -> list[CrawledIngredient]:
+    """str 或 (name, amount) 元组归一为 CrawledIngredient（amount 可选）。"""
+    result: list[CrawledIngredient] = []
+    for item in items or ():
+        if isinstance(item, str):
+            result.append(CrawledIngredient(name=item))
+        else:
+            result.append(CrawledIngredient(name=item[0], amount=item[1]))
+    return result
+
+
 def add_recipe(
     title: str,
     url: str,
@@ -43,10 +54,12 @@ def add_recipe(
                 steps=steps if steps is not None else [],
                 description=description,
                 ingredients=[
-                    CrawledIngredient(name=n, is_essential=True) for n in ingredients
+                    CrawledIngredient(name=i.name, amount=i.amount, is_essential=True)
+                    for i in _as_crawled(ingredients)
                 ],
                 seasonings=[
-                    CrawledIngredient(name=n, is_essential=False) for n in seasonings
+                    CrawledIngredient(name=i.name, amount=i.amount, is_essential=False)
+                    for i in _as_crawled(seasonings)
                 ],
                 tags=list(tags),
             ),
