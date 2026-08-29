@@ -1,6 +1,6 @@
 # P1 采集管线 —— 实施计划（修订版：JSON 中间产物，食材/调料分流）
 
-> 阶段状态：**P1 已完成（parse + ingest，2026-08-29 验收通过；P0 于 2026-08-28 验收）**。本文档依据 [docs/PLAN.md](PLAN.md) 第 3.2、4、7 节与 [docs/DB.md](DB.md) 编写；parse 阶段（采集/解析/清洗/分流/JSON 落盘/断点续采/CLI）与 ingest 阶段（MySQL 入库 + Chroma 向量化）均已实施，验收结果见本文档第 11 节。
+> 阶段状态：**P1 已完成（parse + ingest + 真实嵌入验收，2026-08-29 验收通过；P0 于 2026-08-28 验收）**。本文档依据 [docs/PLAN.md](PLAN.md) 第 3.2、4、7 节与 [docs/DB.md](DB.md) 编写；parse 阶段（采集/解析/清洗/分流/JSON 落盘/断点续采/CLI）与 ingest 阶段（MySQL 入库 + Chroma 向量化）均已实施，验收结果见本文档第 11 节。
 
 ## 1. 目标与范围
 
@@ -234,7 +234,8 @@ uv run uvicorn app.main:app
 | JSON round-trip 与分流 | 完成：schema_version=1 + seasonings 往返测试通过；调料词表 33 组 + 别名归并（生抽/老抽→酱油 等）与去重 |
 | fixture 解析 | 完成：4 个真实 fixture，PC/移动详情 + explore/移动分类索引解析测试通过 |
 | 入库 / 去重 / 断点续采 | 完成：parse 文件判重、resume/force、state.json 断点、failed.jsonl；ingest MySQL `source_url` 唯一键幂等、`--force` 同事务删除重建、无效 JSON 移 `invalid/` + reasons.jsonl，均有测试 |
-| Chroma 幂等 | 完成：本地 `data/chroma` PersistentClient（cosine），`sha256(source_url)` 确定性 ID + chunk 子 ID；分块为结构单元（标题/用料/步骤不混块、无 overlap、超长步骤句号回退）；写入前按 `source_url` 清理旧块再 upsert（防孤儿块、重跑集合大小不变、维度冲突明确报错）；真实嵌入验收需 `EMBEDDING_API_KEY` |
+| Chroma 幂等 | 完成：本地 `data/chroma` PersistentClient（cosine），`sha256(source_url)` 确定性 ID + chunk 子 ID；分块为结构单元（标题/用料/步骤不混块、无 overlap、超长步骤句号回退）；写入前按 `source_url` 清理旧块再 upsert（防孤儿块、重跑集合大小不变、维度冲突明确报错） |
+| 真实嵌入验收 | 完成（2026-08-29）：7 条真实菜谱 → 19 个语义块写入生产 `data/chroma`（`EMBEDDING_BASE_URL`=阿里云百炼兼容端点，`EMBEDDING_MODEL=qwen3.7-text-embedding`，1024 维）；重跑 0 新增、集合 19→19 稳定；`/health/live` 恒 200、`/health/ready` 200。曾误配多模态 `qwen3-vl-embedding` 报 400 `url error`，文本嵌入须用 text-embedding 系列 |
 | LLM 兼容层 | 完成：`OpenAICompatibleLLM`（P3 消费）——httpx 直调 `/chat/completions`、JSON 提取 + pydantic 强校验、重试兜底；`LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` 可切 DeepSeek / Qwen / OpenAI / Ollama（key 留空不带鉴权头）；7 个 MockTransport 单测 |
 | 测试 | 81 个全绿（P0 19 + P1 新增 55 + LLM 兼容 7），全部离线可跑（嵌入/LLM 单测用 MockTransport、管线用注入 FakeEmbeddings） |
 | 性能基线 | fixture 纯解析满足 ≥10 页/s（无网络）；真实抓取受站点限流影响，观测记录见 P1_COLLECTION_DESIGN.md §15 |

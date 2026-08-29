@@ -385,4 +385,4 @@ uv run python scripts/crawl_recipes.py --site xiachufang --stage parse --limit 5
 - **语义边界分块**：弃用纯字符 `RecursiveCharacterTextSplitter`，改为结构单元分块——标题+描述、用料块、每条步骤均为不可切单元，同类型单元贪心合并至 500 字上限，**绝不跨类型混块、单元内不切开**；仅当单条步骤超过上限时按句末标点/换行回退切分（仍超长才硬切）。移除字符 overlap。
 - **块元数据**：每块带 `unit_type`（header/ingredients/steps）与步骤块 `step_start`/`step_end`，供 P2 按类型过滤与展示。
 - **写入前清理旧块**：Chroma 由“纯 upsert”改为“嵌入成功后 `delete(where=source_url)` → `upsert`”，正常重跑也清理，避免菜谱内容变化/块数变少后残留孤儿块；嵌入失败时旧块仍在，无空窗。
-- 空步骤指令（如“合集”类菜谱）不产生步骤块，仅保留标题/描述/用料块；实测 7 条真实菜谱 → 19 个语义块，重跑块数与集合大小稳定。
+- 空步骤指令（如“合集”类菜谱）不产生步骤块，仅保留标题/描述/用料块；实测 7 条真实菜谱 → 19 个语义块，重跑块数与集合大小稳定；2026-08-29 真实嵌入验收已写入生产 `data/chroma`（阿里云百炼 `qwen3.7-text-embedding`，1024 维）。

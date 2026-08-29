@@ -4,6 +4,8 @@
 
 架构决策、流程图、兜底策略与实施计划见 [docs/PLAN.md](docs/PLAN.md)；数据库表结构、ER 图与 DDL 见 [docs/DB.md](docs/DB.md)。
 
+代码仓库：[github.com/sjsj755/ai-cooker](https://github.com/sjsj755/ai-cooker)（master）
+
 ## 技术栈
 
 Python 3.14 + uv · FastAPI · SQLAlchemy 2.x + Alembic · LangGraph · MySQL 8.x（InnoDB + utf8mb4）· pytest
@@ -31,7 +33,7 @@ P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档
 - 健康检查：`/health/live`（恒 200）、`/health/ready`（DB + Chroma，故障 503）
 - `scripts/init_test_db.sql`：测试库预建脚本
 - `app/core/openai_llm.py`：OpenAI 兼容 LLM 实现（P3 消费）——`structured(prompt, schema)` 输出经 JSON 提取 + pydantic 强校验；`LLM_BASE_URL / LLM_MODEL / LLM_API_KEY` 可切 DeepSeek / Qwen / OpenAI / Ollama 等端点
-- 全量 81 个测试通过；真实 JSON 入库验收：7 条入 MySQL、Chroma 幂等重跑 0 新增
+- 全量 81 个测试通过；真实 JSON 入库验收：7 条入 MySQL；**真实嵌入验收（2026-08-29）**：7 条 → 19 个语义块写入生产 `data/chroma`（阿里云百炼 `qwen3.7-text-embedding`，1024 维），重跑 0 新增、集合 19→19 稳定，`/health/live`、`/health/ready` 实测 200
 
 采集使用：
 
@@ -39,7 +41,7 @@ P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档
 uv run python scripts/crawl_recipes.py --site xiachufang --stage parse --limit 5
 uv run python scripts/crawl_recipes.py --site xiachufang --stage parse --dry-run
 uv run python scripts/crawl_recipes.py --site xiachufang --stage ingest
-# 真实嵌入需先配置 EMBEDDING_API_KEY（EMBEDDING_BASE_URL / EMBEDDING_MODEL 可切换）
+# 真实嵌入需配置 EMBEDDING_API_KEY；本机验收用阿里云百炼 qwen3.7-text-embedding（1024 维），换服务商改 EMBEDDING_BASE_URL / EMBEDDING_MODEL
 # P3 LLM 兼容：LLM_BASE_URL / LLM_MODEL / LLM_API_KEY（如 DeepSeek / Qwen / Ollama；密钥留空则不带鉴权头）
 ```
 
