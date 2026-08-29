@@ -1,11 +1,10 @@
-"""LangGraph retrieve/rank 节点：查询源、空查询、Top-5 与真实流程。"""
+"""LangGraph retrieve/rank 节点：查询源、空查询、Top-K 与真实流程。"""
 
 import asyncio
 
 from app.core.retriever import RecipeCandidate
 from app.graph.nodes import rank_node, retrieve_node
-from app.graph.state import empty_state
-from app.graph.workflow import build_graph
+from app.graph.state import CookState, empty_state
 from app.retrieval.errors import RetrievalUnavailableError
 from app.retrieval.hybrid import HybridRetriever
 from app.retrieval.ranking import RankResult, RankingService
@@ -62,18 +61,18 @@ def test_rank_takes_top5():
         for i in range(1, 8)
     ]
     state = empty_state(query="土豆")
-    state["candidates"] = candidates
+    state.candidates = candidates
     result = asyncio.run(rank_node(state))
     assert [c.recipe_id for c in result["ranked"]] == [1, 2, 3, 4, 5]
 
 
-def test_graph_retrieve_rank_integration(tmp_path, monkeypatch):
+def test_retrieve_rank_nodes_integration(tmp_path, monkeypatch):
     url = "https://test.nodes/1"
     try:
-        add_recipe("节点测试土豆鸡蛋甲", url, ingredients=["土豆", "鸡蛋"])
+        add_recipe("节点测试土豆鸡蛋菜甲", url, ingredients=["土豆", "鸡蛋"])
         embeddings = FakeEmbeddings()
         chroma = ChromaStore(path=str(tmp_path / "chroma"))
-        docs = ["节点测试土豆鸡蛋甲 用料"]
+        docs = ["节点测试土豆鸡蛋菜甲 用料"]
         vectors = asyncio.run(embeddings.embed_texts(docs))
         asyncio.run(
             chroma.upsert(
@@ -82,7 +81,7 @@ def test_graph_retrieve_rank_integration(tmp_path, monkeypatch):
                 metadatas=[
                     {
                         "source_url": url,
-                        "title": "节点测试土豆鸡蛋甲",
+                        "title": "节点测试土豆鸡蛋菜甲",
                         "site": "test",
                         "chunk_index": 0,
                         "unit_type": "header",
@@ -95,15 +94,12 @@ def test_graph_retrieve_rank_integration(tmp_path, monkeypatch):
             retriever=HybridRetriever(embeddings=embeddings, chroma=chroma)
         )
         monkeypatch.setattr("app.graph.nodes.get_ranking_service", lambda: service)
-        graph = build_graph()
-        result = asyncio.run(
-            graph.ainvoke(
-                empty_state(query="节点测试土豆鸡蛋", ingredients=["土豆", "鸡蛋"])
-            )
-        )
-        assert result["candidates"]
-        assert result["ranked"] == result["candidates"][:5]
-        scores = [c.match_score for c in result["ranked"]]
+        state = empty_state(query="节点测试土豆鸡蛋菜", ingredients=["土豆", "鸡蛋"])
+        retrieved = asyncio.run(retrieve_node(state))
+        ranked = asyncio.run(rank_node(CookState(**retrieved)))
+        assert retrieved["candidates"]
+        assert ranked["ranked"] == retrieved["candidates"][:5]
+        scores = [c.match_score for c in ranked["ranked"]]
         assert scores == sorted(scores, reverse=True)
     finally:
         delete_recipe(url)

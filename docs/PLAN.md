@@ -2,7 +2,7 @@
 
 > 基于已有食材的菜谱推荐系统。本文档固化当前架构决策、流程图、兜底策略、测试门禁与 P0 实施计划，作为后续实现与扩展的唯一依据。
 
-**阶段状态：P0 已完成（2026-08-28 验收通过）→ P1 已完成（parse + ingest + 真实嵌入验收，2026-08-29 验收通过；实施计划与验收结果见 [docs/P1_PLAN.md](P1_PLAN.md)）→ P2 检索层已完成（BM25 + 向量 + RRF + 缺料/评分 + search API + LangGraph 节点 + 食材向量库，2026-08-29 验收通过；实施计划与验收结果见 [docs/P2_PLAN.md](P2_PLAN.md)）。**
+**阶段状态：P0 已完成（2026-08-28 验收通过）→ P1 已完成（parse + ingest + 真实嵌入验收，2026-08-29 验收通过；实施计划与验收结果见 [docs/P1_PLAN.md](P1_PLAN.md)）→ P2 检索层已完成（BM25 + 向量 + RRF + 缺料/评分 + search API + LangGraph 节点 + 食材向量库，2026-08-29 验收通过；实施计划与验收结果见 [docs/P2_PLAN.md](P2_PLAN.md)）→ P3 LangGraph 工作流已完成（LLM 识别 + 四级映射 + 检索排序 + 推荐生成 + recommend API，2026-08-29 验收通过；实施计划与验收结果见 [docs/P3_PLAN.md](P3_PLAN.md)）。**
 
 ## 1. 项目概述
 
@@ -83,7 +83,7 @@ flowchart TD
 
 ### 2.1 模块职责与扩展方式
 
-- **parse 节点**：LLM 识别自由文本，经 `LLMProvider.structured(prompt, schema)`（P1 已提供 `OpenAICompatibleLLM` 实现）输出结构化食材列表；模型只通过 `LLMProvider` 接口调用，换模型不改节点逻辑。
+- **parse 节点**：LLM 识别自由文本，经 `LLMProvider.structured(prompt, schema)`（P1 已提供 `OpenAICompatibleLLM` 实现）输出结构化食材列表；模型只通过 `LLMProvider` 接口调用，换模型不改节点逻辑。提示词统一规范化（固定系统提示词 + 四段式模板 + 不可信输入 JSON 数据化，防 Prompt 注入；禁虚构约束由模板 + 输出强校验 + 候选白名单回填三重保证）。
 - **词典映射**：LLM 输出按“精确 → 别名 → 包含 → 向量相似”映射到 MySQL 食材词典；未命中标记 `unknown`，走缺料提示，可审核扩充词库。
 - **LangGraph 工作流**：`StateGraph` 定义 `parse → link → filter → retrieve → rank → generate`；新增环节 = 新节点 + 状态 Schema 向后兼容扩展。
 - **检索层**：`retrieve` 只依赖 `Retriever` 接口；MVP 实现 `HybridRetriever`（BM25 + Chroma 向量），数据量增长时新增 Elasticsearch 实现替换。
@@ -102,7 +102,7 @@ flowchart TD
     C --> D{"校验通过？"}
     D -- "否<br/>（最多重试 1 次）" --> B
     D -- "仍失败" --> Z["降级返回<br/>'未能识别，请补充描述'"]
-    D -- "是" --> E["filter 节点<br/>忌口标签过滤"]
+    D -- "是" --> E["filter 节点<br/>构造 query（标准名）/ 缺料列表"]
     E --> F["retrieve 节点<br/>Retriever 接口混合召回"]
     F --> G{"候选是否为空？"}
     G -- "空" --> Y["返回'食材组合未找到'<br/>建议补充食材/放宽忌口"]
@@ -110,11 +110,13 @@ flowchart TD
     H --> I["Top-5 候选"]
     I --> J["generate 节点<br/>LLM 结构化生成"]
     J --> K{"LLM 生成成功？"}
-    K -- "否（超时/服务不可用）" --> X["降级直出候选<br/>标注'AI 文案不可用'"]
+    K -- "否（超时/服务不可用）" --> X["降级直出候选<br/>MySQL 补全 steps + 'AI 文案不可用'"]
     K -- "是" --> W["前端展示<br/>菜谱卡片 + 做法 + 缺料提示"]
     W --> M["用户反馈<br/>收藏 / 不喜欢"]
     M -.-> N["反馈入库（MySQL）<br/>LangSmith 评测数据"]
 ```
+
+> retry_count 语义（P3）：已消耗的重试次数（初始 0）；条件边 `retry_count <= RECOMMEND_MAX_PARSE_RETRIES`（默认 1）回 parse，超限降级结束（最多 2 次 parse）。忌口过滤统一在 rank 阶段由 `RankingService` 执行，filter 只负责清洗与 query 构造。
 
 ### 3.2 数据采集与入库流程（采集器插件化 + 断点续采）
 
@@ -189,7 +191,7 @@ flowchart LR
 - **P0 基建**：项目结构、docker-compose（MySQL 8.x）、Alembic 迁移、接口抽象层（LLM/Embeddings/Retriever/Scoring/Crawler）、LangGraph 状态与空图骨架、兜底框架（重试计数 + `degraded` 标记）、食材词典种子。**✅ 已完成（2026-08-28），验收记录见 8.7。**
 - **P1 采集管线**：首个 Crawler 适配器 + 清洗 + 断点续采 + MySQL/Chroma 双写 + 嵌入 + OpenAI 兼容 LLM/嵌入实现（**修订：两阶段管线 + JSON 中间产物 + 食材/调料分流 + 语义分块**）。**✅ 已完成（2026-08-29），实施计划与验收结果见 [docs/P1_PLAN.md](P1_PLAN.md)。**
 - **P2 检索层**：`HybridRetriever`（BM25 + 向量）+ 默认 `ScoringStrategy`，验证召回质量与耗时基线。**✅ 已完成（2026-08-29），实施计划与验收结果见 [docs/P2_PLAN.md](P2_PLAN.md)。**
-- **P3 LangGraph 工作流**：LLM 识别节点（复用 `OpenAICompatibleLLM`）+ 完整图 + 兜底分支 + 结构化生成 + 推荐 API。
+- **P3 LangGraph 工作流**：LLM 识别节点（复用 `OpenAICompatibleLLM`）+ 完整图 + 兜底分支 + 结构化生成 + 推荐 API。**✅ 已完成（2026-08-29），实施计划与验收结果见 [docs/P3_PLAN.md](P3_PLAN.md)。**
 - **P4 前端**：Web 输入页、推荐卡片、忌口选择、降级提示展示。
 - **P5 全量验收**：端到端压测、安全回归、LangSmith 评测、扩展点文档。
 

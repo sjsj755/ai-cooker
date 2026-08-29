@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from functools import lru_cache
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
 
 from app.config import Settings
+from app.core.fallback import FallbackError, retry_with_backoff
 
 
 class ChromaDimensionError(RuntimeError):
@@ -70,6 +72,54 @@ class ChromaStore:
         """按过滤条件取块元数据（测试与 P2 过滤用）。"""
         return await asyncio.to_thread(self._get_chunk_metadata_sync, where)
 
+    async def iter_chunk_metadata(
+        self,
+        where: dict | None = None,
+        batch_size: int = 1000,
+        max_attempts: int = 3,
+    ) -> AsyncIterator[dict]:
+        """分页扫描块元数据（P3 孤块清理用）。
+
+        按 offset 循环拉取，返回条数 < batch_size 即停止；单页失败经
+        retry_with_backoff 重试，仍失败抛 FallbackError（含 offset/batch），
+        由调用方决定终止，禁止用部分扫描结果继续比对删除。
+        """
+        offset = 0
+        while True:
+            batch = await self._fetch_metadata_page(
+                where, batch_size, offset, max_attempts
+            )
+            if not batch:
+                return
+            for meta in batch:
+                yield meta
+            if len(batch) < batch_size:
+                return
+            offset += len(batch)
+
+    async def _fetch_metadata_page(
+        self,
+        where: dict | None,
+        batch_size: int,
+        offset: int,
+        max_attempts: int,
+    ) -> list[dict]:
+        @retry_with_backoff(
+            max_attempts=max_attempts, base_delay=0.2, max_delay=2.0
+        )
+        async def fetch_once() -> list[dict]:
+            return await asyncio.to_thread(
+                self._get_metadata_page_sync, where, batch_size, offset
+            )
+
+        try:
+            return await fetch_once()
+        except FallbackError as exc:
+            raise FallbackError(
+                f"读取元数据分页失败 offset={offset} batch={batch_size} "
+                f"max_attempts={max_attempts}: {exc}"
+            ) from exc
+
     async def query(
         self,
         query_embeddings: list[list[float]],
@@ -119,6 +169,14 @@ class ChromaStore:
 
     def _get_chunk_metadata_sync(self, where: dict | None) -> list[dict]:
         result = self._collection.get(where=where, include=["metadatas"])
+        return list(result.get("metadatas") or [])
+
+    def _get_metadata_page_sync(
+        self, where: dict | None, batch_size: int, offset: int
+    ) -> list[dict]:
+        result = self._collection.get(
+            where=where, limit=batch_size, offset=offset, include=["metadatas"]
+        )
         return list(result.get("metadatas") or [])
 
     def _query_sync(

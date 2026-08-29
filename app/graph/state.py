@@ -1,6 +1,10 @@
-"""LangGraph 状态 Schema（向后兼容扩展：新环节 = 新节点 + 新字段）。"""
+"""LangGraph 状态 Schema（Pydantic BaseModel，字段默认值即状态通道默认值）。
 
-from typing import TypedDict
+LangGraph 1.2.11 中，TypedDict(total=False) 状态 Schema 不会自动填充通道默认值，
+改为 BaseModel 后直接 ainvoke 未初始化状态也能得到 retry_count=0 等默认键。
+节点返回约定：一律 {**state.model_dump(), ...更新项}（全量展开），保证
+last-value-wins 合并语义下未更新键（含 retry_count）由旧状态保留。
+"""
 
 from pydantic import BaseModel, Field
 
@@ -8,7 +12,7 @@ from app.core.retriever import RecipeCandidate
 
 
 class ParsedIngredient(BaseModel):
-    """parse 节点输出；unknown=True 表示词典映射未命中。"""
+    """parse 节点输出；unknown=True 表示字典映射未命中。"""
 
     raw_name: str
     normalized_name: str | None = None
@@ -31,19 +35,20 @@ class Recommendation(BaseModel):
     tips: str | None = None
 
 
-class CookState(TypedDict, total=False):
+class CookState(BaseModel):
     """工作流状态；retry_count 由状态机层强制约束防死循环。"""
 
-    query: str
-    ingredients: list[str]
-    exclude_tags: list[str]
-    parsed_ingredients: list[ParsedIngredient]
-    candidates: list[RecipeCandidate]
-    ranked: list[RecipeCandidate]
-    recommendations: list[Recommendation]
-    retry_count: int
-    degraded: bool
-    notice: str | None
+    query: str = ""
+    ingredients: list[str] = Field(default_factory=list)
+    exclude_tags: list[str] = Field(default_factory=list)
+    parsed_ingredients: list[ParsedIngredient] = Field(default_factory=list)
+    candidates: list[RecipeCandidate] = Field(default_factory=list)
+    ranked: list[RecipeCandidate] = Field(default_factory=list)
+    recommendations: list[Recommendation] = Field(default_factory=list)
+    retry_count: int = 0
+    parse_error: bool = False
+    degraded: bool = False
+    notice: str | None = None
 
 
 def empty_state(
@@ -56,11 +61,4 @@ def empty_state(
         query=query,
         ingredients=ingredients or [],
         exclude_tags=exclude_tags or [],
-        parsed_ingredients=[],
-        candidates=[],
-        ranked=[],
-        recommendations=[],
-        retry_count=0,
-        degraded=False,
-        notice=None,
     )

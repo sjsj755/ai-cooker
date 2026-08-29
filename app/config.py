@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 30.0
     llm_temperature: float = 0.2
 
+    # P3 推荐工作流
+    recommend_top_k: int = 5
+    recommend_max_parse_retries: int = 1
+    link_vector_similarity_threshold: float = 0.85
+
     # P2 检索（BM25 + Chroma 向量 + RRF 融合）
     retrieval_top_k: int = 50
     retrieval_fusion_rrf_k: int = 60

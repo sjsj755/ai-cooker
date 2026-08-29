@@ -1,4 +1,4 @@
-"""LangGraph：能编译、空状态跑通（无 query 时 retrieve 置缺查询提示）。"""
+"""LangGraph：能编译、空状态降级结束、未初始化状态带默认值跑通。"""
 
 import asyncio
 
@@ -9,9 +9,22 @@ from app.graph.workflow import build_graph
 def test_graph_compiles_and_runs_empty_state():
     graph = build_graph()
     result = asyncio.run(graph.ainvoke(empty_state()))
-    assert result["retry_count"] == 0
-    assert result["degraded"] is False
-    assert result["notice"] == "缺少查询文本"
+    # 空输入不可恢复：parse 直接超限 → degrade_end
+    assert result["retry_count"] == 2
+    assert result["degraded"] is True
+    assert result["notice"] == "未能识别食材，请补充描述"
     assert result["ingredients"] == []
+    assert result["parsed_ingredients"] == []
     assert result["candidates"] == []
     assert result["ranked"] == []
+    assert result["recommendations"] == []
+
+
+def test_graph_runs_uninitialized_state_with_defaults():
+    """通道默认：BaseModel 状态 Schema 直接 ainvoke 未初始化输入也不缺键。"""
+    graph = build_graph()
+    result = asyncio.run(graph.ainvoke({}))
+    assert result["retry_count"] == 2  # 默认 0 → 空输入不可恢复超限
+    assert result["degraded"] is True
+    assert result["notice"] == "未能识别食材，请补充描述"
+    assert result["ingredients"] == []

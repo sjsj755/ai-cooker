@@ -10,9 +10,9 @@
 
 Python 3.14 + uv · FastAPI · SQLAlchemy 2.x + Alembic · LangGraph · MySQL 8.x（InnoDB + utf8mb4）· pytest
 
-## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）→ P2 检索层（已完成）
+## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）→ P2 检索层（已完成）→ P3 LangGraph 工作流（已完成，2026-08-29 验收通过）
 
-P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档见 [docs/P1_COLLECTION_DESIGN.md](docs/P1_COLLECTION_DESIGN.md)；P2 检索层实施计划见 [docs/P2_PLAN.md](docs/P2_PLAN.md)。
+P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档见 [docs/P1_COLLECTION_DESIGN.md](docs/P1_COLLECTION_DESIGN.md)；P2 检索层实施计划见 [docs/P2_PLAN.md](docs/P2_PLAN.md)；P3 LangGraph 工作流实施计划见 [docs/P3_PLAN.md](docs/P3_PLAN.md)。
 
 ### P1（parse）交付物
 
@@ -56,6 +56,21 @@ uv run python scripts/crawl_recipes.py --site xiachufang --stage ingest
 - 全量 134 个测试通过；真实环境验收（2026-08-29）：`GET /api/recipes/search?q=土豆 鸡蛋&ingredients=土豆,鸡蛋` 混合检索 `degraded=false`、缺 0 料排最前；无意义查询返回空 + notice；评测 recall@5=0.755（≥0.7）、混合 ≥ 单路；1k 语料构建 113ms/查询 P95 23ms、5k 构建 397ms/查询 P95 6.4ms
 
 > 阿里云百炼 compatible-mode 的 embedding 单批上限 20：使用百炼时在 `.env` 设 `EMBEDDING_BATCH_SIZE=20`（已按此验收）。
+
+### P3（LangGraph 工作流）交付物
+
+- `app/graph/state.py`：`CookState` 改为 Pydantic BaseModel（字段默认值即通道默认值），`retry_count=0` 显式初始化，直接 `ainvoke({})` 也不缺键；节点统一 `{**state.model_dump(), ...}` 全量展开，合并保留未更新键
+- `app/graph/prompts.py` + `parse_node`：LLM 自由文本食材识别（`IngredientExtractionList` 强校验 + 防注入隔离），失败按 `retry_count <= RECOMMEND_MAX_PARSE_RETRIES`（默认 1，最多 2 次 parse）唯一决策点重试，超限降级结束（`degraded` + notice）
+- 提示词规范化（v1.1）：`app/core/prompts.py` 固定系统提示词（指令层级 + JSON-only + 禁虚构）+ `app/graph/prompts.py` 统一四段式模板（任务 → JSON 只读数据块 → 约束 → 输出要求）；不可信用户内容经清洗 + `json.dumps` 数据化嵌入，注入文本无法改写指令；模板为确定性纯函数（同输入同输出）
+- `app/graph/linking.py` + `link_node`：四级映射（精确 → 别名 → 包含 → `ingredients_docs` 向量，相似度阈值 0.85 可配），向量不可用自动降级三级映射（不报错），未命中 `unknown=True`
+- `filter_node`：清洗去重、≤30 项 / 单项 ≤50 字拦截、构造 `state.query`（标准名优先，未映射用 raw_name）与 `state.ingredients`（缺料计算）
+- `generate_node`：LLM 生成 `RecommendationSet`，防幻觉（recipe_id 白名单 + 越界/重复丢弃 + WARN；title/分数/缺料/难度/时长等事实字段一律以候选集为准回填，LLM 只写 steps/tips；输出按候选序去重稳定排序）；LLM steps 缺失回填 MySQL；LLM 失败 / 无 key 降级直出 MySQL 原文（steps/difficulty/cook_time 完整，`tips=None` + notice），MySQL 不可用则 503
+- `workflow.py`：条件边（parse 重试唯一决策点、query 为空降级结束、候选为空结束、generate 降级）
+- `POST /api/recipes/recommend`：501 → 200，响应 `recipes: list[Recommendation]`；空食材 400、检索不可用 503
+- 配置：`RECOMMEND_TOP_K=5`、`RECOMMEND_MAX_PARSE_RETRIES=1`、`LINK_VECTOR_SIMILARITY_THRESHOLD=0.85`
+- P2 遗留：`ChromaStore.iter_chunk_metadata` 分页（batch=1000）+ 单页失败重试、仍失败中止（`FallbackError` 含 offset/batch）；`cleanup_orphan_chunks.py` 改扫描-比对-删除分离 + `--max-retries`，失败退出码 3
+- 评测：`scripts/eval_recommend.py`（10 条识别用例项级准确率基线 ≥0.85，实测 17/18 = 0.944）
+- 全量 171 个测试通过（134 + 新增 37）；真实环境验收（2026-08-29）：`ingredients=["土豆","鸡蛋"]` 实调 DeepSeek + 阿里云嵌入 → `degraded=false`、21 候选、LLM 推荐 4 条含步骤；5 并发 mock-LLM 全流程 < 5s
 
 当前文档记录的 P0 交付物：
 
@@ -106,7 +121,7 @@ FLUSH PRIVILEGES;
 | GET | `/api/recipes/search?q=&ingredients=&exclude_tags=` | 混合检索（BM25 + 向量 + 缺料/评分） | P2 完成 |
 | GET | `/api/recipes/{id}` | 菜谱详情 | P0 完成（空库返回 404） |
 | GET | `/api/tags` | 标签列表 | P0 完成 |
-| POST | `/api/recipes/recommend` | 推荐（LangGraph 工作流） | 501 占位，P3 实现 |
+| POST | `/api/recipes/recommend` | 推荐（LangGraph 工作流） | P3 完成 |
 
 交互式文档：`http://127.0.0.1:8000/docs`
 
@@ -116,4 +131,5 @@ FLUSH PRIVILEGES;
 
 - API 限流与全量压测尚未自动化，归入 P5（P0/P1 手工基线、P2 检索 1k/5k 基线已记录）；
 - 测试库 `ai_cooker_test` 需 root 预建并授权；
+- `uv audit` 报 chromadb 1.5.9 共 5 项已知漏洞（2026 年新披露、暂无修复版本）；本地单用户部署（遥测关闭、无鉴权服务）风险有限，已记录待上游修复后升级，检索可降级 BM25 不阻塞；
 - 首次 `uv sync` / `uv audit` 需要外网访问。

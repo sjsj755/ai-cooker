@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 from app.config import Settings
 from app.core.fallback import FallbackError, retry_with_backoff
 from app.core.llm import LLMProvider
+from app.core.prompts import SYSTEM_PROMPT
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -66,10 +67,7 @@ class OpenAICompatibleLLM(LLMProvider):
         messages = [
             {
                 "role": "system",
-                "content": (
-                    "你只输出合法 JSON，不输出 Markdown 代码块或任何额外文字；"
-                    "字段名与类型必须严格符合用户给定的 JSON Schema。"
-                ),
+                "content": SYSTEM_PROMPT,
             },
             {
                 "role": "user",
