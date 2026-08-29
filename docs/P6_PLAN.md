@@ -353,6 +353,23 @@ BACKUP_STOP_APP_ALLOWED=true ./scripts/backup.sh --stop-app
 > 经花生壳内网穿透临时公网地址 `https://12926kduk6079.vicp.fun/` 验证：
 > 首页 200、`/api/tags` 200、`/health/live` 200、`/docs` 404（公网侧确认
 > 文档已关闭）。该地址仅供临时演示，非生产部署；正式部署仍待服务器 Docker
+
+### 8.1 P6.1 推荐性能优化（2026-08-29 追加）
+
+> 背景：花生壳公网地址对外演示时，他人反馈推荐“太慢”且存在冷启动超时
+> （服务重启后首个请求实测 30-60s，超过前端 recommend 30s 超时；热态单个
+> 唯一请求约 13s，其中 parse LLM ~3s + 检索 ~2-5s + generate LLM ~8-17s）。
+> 据此新增三项低风险优化并回填验收。
+
+| 优化 | 实现 | 验证 |
+|---|---|---|
+| 推荐结果 TTL 缓存 | `app/core/ttl_cache.py` + `app/api/routes/recommend.py`：键为归一化食材+忌口（清洗/去重/排序，顺序无关），`RECOMMEND_CACHE_TTL_SECONDS` 默认 600s；仅缓存非降级结果，故障不“粘住” | 番茄/鸡蛋 首次 17.5s → 二次 0.008s；土豆/鸡蛋 首次 13.2s → 二次 0.003s；公网重复推荐 0.26s |
+| 启动后台预热 | `HybridRetriever.warmup()` + `RankingService.warmup()` + `app/main.py` lifespan 后台任务（`WARMUP_ON_STARTUP` 默认开启，失败仅告警不阻断） | 重启后首个请求不再出现 30-60s 冷启动；热态首次唯一请求 13-17s（LLM 生成为主，检索降至 ~2s） |
+| BM25/向量双路并行 | `hybrid._retrieve` 拆分 `_bm25_path` / `_vector_path` 并发执行；降级/503 语义与原串行版一致 | 热态检索 ~1.96s → 并行后 ~1.2-2s（受 LLM 波动掩盖）；全量回归 284 passed + 13 skipped（新增缓存/预热 14 用例） |
+
+> 配置新增：`RECOMMEND_CACHE_TTL_SECONDS` / `RECOMMEND_CACHE_MAX_ENTRIES` /
+> `WARMUP_ON_STARTUP`（`.env.example` 已同步；测试环境由 `tests/conftest.py`
+> 关闭缓存与预热，保证既有用例行为不变）。
 > 全栈实跑回填。
 
 ## 9. 部署须知

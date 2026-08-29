@@ -1,5 +1,6 @@
 """FastAPI 应用工厂 + 全局路由注册 + 限流装配（P5）+ 安全加固（P6）。"""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -89,13 +90,40 @@ async def _redis_ping_fail_fast(url: str) -> None:
         await client.aclose()
 
 
+async def _startup_warmup() -> None:
+    """P6.1 后台预热检索（BM25 语料 + Chroma），失败仅告警不阻断启动。"""
+    from app.retrieval.ranking import get_ranking_service
+
+    try:
+        await get_ranking_service().warmup()
+        log_event(logger, logging.INFO, "startup.warmup.done")
+    except Exception as exc:  # noqa: BLE001 - 预热为尽力而为，失败不阻止服务
+        log_event(
+            logger,
+            logging.WARNING,
+            "startup.warmup.failed",
+            error=f"{type(exc).__name__}: {exc}",
+        )
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """启动阶段：Redis fail-fast 健康检查（仅限流启用且 storage=redis 时）。"""
     settings = get_settings()
     if settings.rate_limit_enabled and settings.rate_limit_storage == "redis":
         await _redis_ping_fail_fast(settings.rate_limit_redis_url)
+    warmup_task: asyncio.Task | None = None
+    if settings.warmup_on_startup:
+        warmup_task = asyncio.create_task(_startup_warmup())
+        application.state.warmup_task = warmup_task
     yield
+    if warmup_task is not None:
+        try:
+            await asyncio.wait_for(warmup_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            warmup_task.cancel()
+        except Exception:  # noqa: BLE001 - 关停阶段不因预热异常报错
+            pass
 
 
 def create_app() -> FastAPI:

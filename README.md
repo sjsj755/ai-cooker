@@ -10,7 +10,7 @@
 
 Python 3.14 + uv · FastAPI · SQLAlchemy 2.x + Alembic · LangGraph · MySQL 8.x（InnoDB + utf8mb4）· pytest
 
-## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）→ P2 检索层（已完成）→ P3 LangGraph 工作流（已完成，2026-08-29 验收通过）→ P4 前端（已完成，2026-08-29 验收通过：191 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_PLAN.md](docs/P4_PLAN.md)）→ P4.1 前端视觉与交互优化（已完成，2026-08-29 验收通过：194 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md)）→ P4.2 推荐页详情抽屉 + 食材/调料区分 + 感知性能优化（已完成，2026-08-29 验收通过：200 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_2_PLAN.md](docs/P4_2_PLAN.md)）→ P5 全量验收 + 用户反馈闭环（已完成，2026-08-29 验收通过：240 测试全绿 + 6 条 Playwright 冒烟 + k6 10k 门禁通过 + 50k 基线留痕；实施计划与验收结果见 [docs/P5_PLAN.md](docs/P5_PLAN.md)）→ P6 部署上线（代码实施完成 + 本机裸机验证，2026-08-29：269 测试全绿；Docker Compose 全栈 + Caddy 自动 HTTPS + 可信代理 IP + 安全加固 + 备份运维 + GitHub Actions 门禁；实施计划与验收结果见 [docs/P6_PLAN.md](docs/P6_PLAN.md)，Docker 全栈服务器实跑与 CI 实跑待回填）
+## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）→ P2 检索层（已完成）→ P3 LangGraph 工作流（已完成，2026-08-29 验收通过）→ P4 前端（已完成，2026-08-29 验收通过：191 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_PLAN.md](docs/P4_PLAN.md)）→ P4.1 前端视觉与交互优化（已完成，2026-08-29 验收通过：194 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md)）→ P4.2 推荐页详情抽屉 + 食材/调料区分 + 感知性能优化（已完成，2026-08-29 验收通过：200 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_2_PLAN.md](docs/P4_2_PLAN.md)）→ P5 全量验收 + 用户反馈闭环（已完成，2026-08-29 验收通过：240 测试全绿 + 6 条 Playwright 冒烟 + k6 10k 门禁通过 + 50k 基线留痕；实施计划与验收结果见 [docs/P5_PLAN.md](docs/P5_PLAN.md)）→ P6 部署上线（代码实施完成 + 本机裸机验证，2026-08-29：269 测试全绿；Docker Compose 全栈 + Caddy 自动 HTTPS + 可信代理 IP + 安全加固 + 备份运维 + GitHub Actions 门禁；实施计划与验收结果见 [docs/P6_PLAN.md](docs/P6_PLAN.md)，Docker 全栈服务器实跑与 CI 实跑待回填）→ P6.1 推荐性能优化（已完成，2026-08-29 验收通过：284 测试全绿 + 13 skipped；推荐结果 TTL 缓存秒回 + 启动后台预热 + BM25/向量双路并行，实测见 README「P6.1」小节）
 
 P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档见 [docs/P1_COLLECTION_DESIGN.md](docs/P1_COLLECTION_DESIGN.md)；P2 检索层实施计划见 [docs/P2_PLAN.md](docs/P2_PLAN.md)；P3 LangGraph 工作流实施计划见 [docs/P3_PLAN.md](docs/P3_PLAN.md)；P4 前端实施计划见 [docs/P4_PLAN.md](docs/P4_PLAN.md)；P4.1 前端视觉与交互优化实施计划见 [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md)；P5 全量验收与用户反馈闭环实施计划见 [docs/P5_PLAN.md](docs/P5_PLAN.md)；P6 部署上线实施计划见 [docs/P6_PLAN.md](docs/P6_PLAN.md)。
 
@@ -94,6 +94,14 @@ uv run python scripts/crawl_recipes.py --site xiachufang --stage ingest
 - 感知性能优化：打开抽屉立即渲染骨架 + 加载圆环（复用 `.is-loading` 动画），数据返回后替换内容；推荐卡折叠改为数据未变时增量切换 `hidden` / `aria-expanded`（`lastRenderedResults` 引用浅比较），仅数据变化才全量重建
 - 交付后修复：匹配度徽章改为按本批最高分归一化展示（`match_score` 是 RRF 融合分、绝对量纲极小，此前真实数据全部显示 1%），推荐 / 搜索两页共用，后端契约不变
 - 全量 200 测试全绿 + 6 条 Playwright 冒烟通过；视觉截图 `.tmp_bridge/p4_2_*.png` 供浏览器复核
+
+### P6.1（推荐性能优化 · 已完成）
+
+- 推荐结果内存 TTL 缓存（`RECOMMEND_CACHE_TTL_SECONDS` 默认 600s，0=关闭）：键为归一化后的食材+忌口（清洗/去重/排序，顺序无关），重复/相似查询直接秒回；仅缓存非降级结果，LLM/检索故障恢复后立即生效，不“粘住”
+- 启动后台预热（`WARMUP_ON_STARTUP` 默认开启）：lifespan 后台预构建 BM25 语料 + 触碰 Chroma 集合，把冷启动（实测 30-60s，超过前端 recommend 30s 超时）移出首个用户请求路径
+- BM25 与向量双路检索并行（`hybrid._retrieve` 拆分 `_bm25_path` / `_vector_path` 后并发执行）：热态检索耗时约减半，冷启动时语料构建与 Chroma 加载同时进行；降级 / 503 语义与原串行版完全一致
+- 配置：`RECOMMEND_CACHE_TTL_SECONDS` / `RECOMMEND_CACHE_MAX_ENTRIES` / `WARMUP_ON_STARTUP`（`.env.example` 已同步；测试环境默认关闭缓存与预热，保证用例隔离）
+- 验证（2026-08-29，本机 + 花生壳公网）：番茄/鸡蛋 首次 17.5s → 二次 0.008s；土豆/鸡蛋 首次 13.2s → 二次 0.003s；公网 https://12926kduk6079.vicp.fun/ 重复推荐 0.26s；全量 284 passed + 13 skipped
 
 当前文档记录的 P0 交付物：
 

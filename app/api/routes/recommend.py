@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from app.core.html_clean import clean_text
 from app.core.logging import get_logger, log_event
 from app.core.rate_limit import build_limiter, make_route_limit
+from app.core.ttl_cache import TTLCache
 from app.config import get_settings
 from app.graph.state import empty_state
 from app.graph.workflow import build_graph
@@ -16,6 +17,34 @@ from app.schemas.recommend import RecommendRequest, RecommendResponse
 router = APIRouter()
 logger = get_logger("app.api.recommend")
 _route_limit = make_route_limit(build_limiter(get_settings()))
+_settings = get_settings()
+_recommend_cache = TTLCache(
+    ttl_seconds=max(float(_settings.recommend_cache_ttl_seconds), 0.0),
+    max_entries=int(_settings.recommend_cache_max_entries),
+)
+
+
+def _cache_key(payload: RecommendRequest) -> tuple:
+    """缓存键：归一化（清洗 + 去重 + 排序）后的食材与忌口，顺序无关。"""
+    ingredients = tuple(
+        sorted(
+            {
+                clean_text(item)
+                for item in payload.ingredients
+                if clean_text(item)
+            }
+        )
+    )
+    exclude_tags = tuple(
+        sorted(
+            {
+                clean_text(item)
+                for item in (payload.exclude_tags or [])
+                if clean_text(item)
+            }
+        )
+    )
+    return (ingredients, exclude_tags)
 
 
 @router.post("/recommend", response_model=RecommendResponse, status_code=200)
@@ -26,6 +55,11 @@ async def recommend(
     """推荐：LLM 识别 → 四级映射 → 检索排序 → LLM 生成（可降级直出原文）。"""
     if not any(clean_text(item) for item in payload.ingredients):
         raise HTTPException(status_code=400, detail="食材列表不能为空")
+    key = _cache_key(payload)
+    if _recommend_cache.enabled:
+        cached = _recommend_cache.get(key)
+        if cached is not None:
+            return cached.model_copy(deep=True)
     try:
         result = await build_graph().ainvoke(
             empty_state(
@@ -53,8 +87,12 @@ async def recommend(
             http_status=500,
         )
         raise HTTPException(status_code=500, detail="推荐服务异常") from exc
-    return RecommendResponse(
+    response = RecommendResponse(
         recipes=result.get("recommendations") or [],
         degraded=bool(result.get("degraded", False)),
         notice=result.get("notice"),
     )
+    # 仅缓存非降级结果：LLM/检索故障导致的降级不“粘住”，恢复后立即返回新结果
+    if _recommend_cache.enabled and not response.degraded:
+        _recommend_cache.set(key, response)
+    return response

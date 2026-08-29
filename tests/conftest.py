@@ -7,6 +7,10 @@ TEST_DATABASE_URL = "mysql+pymysql://ai_cooker:ai_cooker@127.0.0.1:3306/ai_cooke
 # 必须在导入 app 之前设置，保证 engine 指向测试库
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 os.environ.setdefault("CHROMA_DIR", "./data/chroma-test")
+# P6.1 性能优化在测试中默认关闭，保证既有用例行为不变：
+# 推荐缓存 TTL=0（禁用）、启动预热关闭（避免测试触发真实 MySQL/Chroma 预热）
+os.environ.setdefault("RECOMMEND_CACHE_TTL_SECONDS", "0")
+os.environ.setdefault("WARMUP_ON_STARTUP", "false")
 
 import pytest  # noqa: E402
 from alembic import command  # noqa: E402

@@ -78,6 +78,22 @@ class HybridRetriever(Retriever):
         except EmbeddingConfigError:
             return None
 
+    async def warmup(self) -> None:
+        """P6.1 启动预热：预构建 BM25 语料并触碰 Chroma 集合，
+        把冷启动（实测 30-60s）移到服务后台，避免首个用户承担。"""
+        corpus = self._get_corpus()
+        await corpus.ensure_built()
+        try:
+            chroma = self._get_chroma()
+            chroma.count()
+        except Exception as exc:  # noqa: BLE001 - 预热失败不阻断启动，仅告警
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "retrieval.warmup.chroma_failed",
+                error=f"{type(exc).__name__}: {exc}",
+            )
+
     async def retrieve(self, query: str, top_k: int = 50) -> list[RecipeCandidate]:
         started = time.perf_counter()
         log_event(
@@ -133,107 +149,33 @@ class HybridRetriever(Retriever):
             return [], False, None
 
         corpus = self._get_corpus()
-        await corpus.ensure_built()
-
-        reasons: list[str] = []
-        if corpus.degraded_notice:
-            reasons.append(corpus.degraded_notice)
-
         k = self._settings.retrieval_fusion_rrf_k
         w_bm25 = self._settings.retrieval_bm25_weight
         w_vector = self._settings.retrieval_vector_weight
 
-        bm25_hits = await corpus.search(query, top_k * 2)
-        bm25_terms: dict[int, float] = {}
-        for rank, (recipe_id, _score) in enumerate(bm25_hits, start=1):
-            bm25_terms[recipe_id] = rrf([rank], k, w_bm25)
+        async def _bm25_path() -> tuple[dict[int, float], str | None]:
+            await corpus.ensure_built()
+            hits = await corpus.search(query, top_k * 2)
+            terms: dict[int, float] = {}
+            for rank, (recipe_id, _score) in enumerate(hits, start=1):
+                terms[recipe_id] = rrf([rank], k, w_bm25)
+            return terms, corpus.degraded_notice
 
-        vector_terms: dict[int, float] = {}
-        vector_meta: dict[int, dict] = {}
-        vector_degraded_reason: str | None = None
-        embeddings = self._get_embeddings()
-        if not self._enable_vector:
-            vector_degraded_reason = "向量路未启用，仅关键词检索"
-        elif embeddings is None:
-            vector_degraded_reason = "EMBEDDING_API_KEY 未配置，已回退关键词检索"
-        else:
-            # 只有真正要跑向量路时才触碰 Chroma（避免 BM25-only 每请求 count 开销）
-            chroma = self._get_chroma()
-            if chroma.count() == 0:
-                vector_degraded_reason = "Chroma 集合为空，已回退关键词检索"
-                chroma = None
-        if embeddings is not None and vector_degraded_reason is None:
-            chroma = self._get_chroma()
-            try:
-                query_vectors = await embeddings.embed_texts([query])
-                hits = await chroma.query(
-                    query_vectors,
-                    n_results=top_k * self._settings.retrieval_vector_query_multiplier,
-                )
-                # 相似度阈值：过滤无关噪声块（Chroma 无内置阈值，恒返回 top_n）
-                max_distance = self._settings.retrieval_vector_max_distance
-                hits = [
-                    h
-                    for h in hits
-                    if (h.get("distance") if h.get("distance") is not None else 1.0)
-                    <= max_distance
-                ]
-            except RetrievalUnavailableError:
-                raise
-            except Exception as exc:  # noqa: BLE001 - 向量路任一步失败即降级
-                vector_degraded_reason = (
-                    f"向量检索不可用：{type(exc).__name__}，已回退关键词检索"
-                )
-                log_event(
-                    self._logger,
-                    logging.WARNING,
-                    "retrieval.query.degraded",
-                    degraded_reason=vector_degraded_reason,
-                    error=str(exc),
-                )
-            else:
-                if hits:
-                    grouped: dict[str, list[int]] = {}
-                    for idx, hit in enumerate(hits, start=1):
-                        meta = hit.get("metadata") or {}
-                        url = meta.get("source_url")
-                        if url:
-                            grouped.setdefault(url, []).append(idx)
-                    try:
-                        lookup = await asyncio.to_thread(
-                            self._lookup_recipes, list(grouped)
-                        )
-                    except Exception as exc:  # noqa: BLE001 - MySQL 反查异常 → 503
-                        raise RetrievalUnavailableError(
-                            f"向量命中反查菜谱失败: {type(exc).__name__}: {exc}"
-                        ) from exc
-                    valid = {
-                        url: ranks for url, ranks in grouped.items() if url in lookup
-                    }
-                    orphan_count = len(grouped) - len(valid)
-                    if orphan_count:
-                        log_event(
-                            self._logger,
-                            logging.WARNING,
-                            "retrieval.vector.orphan_chunks",
-                            orphan_count=orphan_count,
-                            total_urls=len(grouped),
-                        )
-                    if grouped and not valid:
-                        vector_degraded_reason = (
-                            "向量检索结果与菜谱库不一致（全部为孤儿块），已回退关键词检索"
-                        )
-                    else:
-                        for url, ranks in valid.items():
-                            info = lookup[url]
-                            recipe_id = info["recipe_id"]
-                            vector_terms[recipe_id] = rrf(ranks, k, w_vector)
-                            vector_meta[recipe_id] = {
-                                "title": info["title"],
-                                "difficulty": info["difficulty"],
-                                "cook_time_minutes": info["cook_time_minutes"],
-                            }
+        # P6.1：BM25 与向量双路并行——冷启动时语料构建与 Chroma 加载同时进行，
+        # 热态下检索耗时约减半；任一路失败语义与原串行版完全一致。
+        bm25_task = asyncio.create_task(_bm25_path())
+        try:
+            vector_terms, vector_meta, vector_degraded_reason = (
+                await self._vector_path(query, top_k, k, w_vector)
+            )
+        except BaseException:
+            bm25_task.cancel()
+            raise
+        bm25_terms, bm25_degraded_notice = await bm25_task
 
+        reasons: list[str] = []
+        if bm25_degraded_notice:
+            reasons.append(bm25_degraded_notice)
         if vector_degraded_reason:
             reasons.append(vector_degraded_reason)
         degraded = bool(reasons)
@@ -256,6 +198,93 @@ class HybridRetriever(Retriever):
             )
         candidates.sort(key=lambda c: (-c.match_score, c.recipe_id))
         return candidates[:top_k], degraded, self.last_notice
+
+    async def _vector_path(
+        self,
+        query: str,
+        top_k: int,
+        k: int,
+        w_vector: float,
+    ) -> tuple[dict[int, float], dict[int, dict], str | None]:
+        """向量检索单路（embedding + Chroma + MySQL 反查），供双路并行调用。
+        返回 (vector_terms, vector_meta, degraded_reason)。"""
+        vector_terms: dict[int, float] = {}
+        vector_meta: dict[int, dict] = {}
+        embeddings = self._get_embeddings()
+        if not self._enable_vector:
+            return vector_terms, vector_meta, "向量路未启用，仅关键词检索"
+        if embeddings is None:
+            return vector_terms, vector_meta, "EMBEDDING_API_KEY 未配置，已回退关键词检索"
+        # 只有真正要跑向量路时才触碰 Chroma（避免 BM25-only 每请求 count 开销）
+        chroma = self._get_chroma()
+        if chroma.count() == 0:
+            return vector_terms, vector_meta, "Chroma 集合为空，已回退关键词检索"
+        try:
+            query_vectors = await embeddings.embed_texts([query])
+            hits = await chroma.query(
+                query_vectors,
+                n_results=top_k * self._settings.retrieval_vector_query_multiplier,
+            )
+            # 相似度阈值：过滤无关噪声块（Chroma 无内置阈值，恒返回 top_n）
+            max_distance = self._settings.retrieval_vector_max_distance
+            hits = [
+                h
+                for h in hits
+                if (h.get("distance") if h.get("distance") is not None else 1.0)
+                <= max_distance
+            ]
+        except RetrievalUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 向量路任一步失败即降级
+            reason = f"向量检索不可用：{type(exc).__name__}，已回退关键词检索"
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "retrieval.query.degraded",
+                degraded_reason=reason,
+                error=str(exc),
+            )
+            return vector_terms, vector_meta, reason
+        if not hits:
+            return vector_terms, vector_meta, None
+        grouped: dict[str, list[int]] = {}
+        for idx, hit in enumerate(hits, start=1):
+            meta = hit.get("metadata") or {}
+            url = meta.get("source_url")
+            if url:
+                grouped.setdefault(url, []).append(idx)
+        try:
+            lookup = await asyncio.to_thread(self._lookup_recipes, list(grouped))
+        except Exception as exc:  # noqa: BLE001 - MySQL 反查异常 → 503
+            raise RetrievalUnavailableError(
+                f"向量命中反查菜谱失败: {type(exc).__name__}: {exc}"
+            ) from exc
+        valid = {url: ranks for url, ranks in grouped.items() if url in lookup}
+        orphan_count = len(grouped) - len(valid)
+        if orphan_count:
+            log_event(
+                self._logger,
+                logging.WARNING,
+                "retrieval.vector.orphan_chunks",
+                orphan_count=orphan_count,
+                total_urls=len(grouped),
+            )
+        if grouped and not valid:
+            return (
+                vector_terms,
+                vector_meta,
+                "向量检索结果与菜谱库不一致（全部为孤儿块），已回退关键词检索",
+            )
+        for url, ranks in valid.items():
+            info = lookup[url]
+            recipe_id = info["recipe_id"]
+            vector_terms[recipe_id] = rrf(ranks, k, w_vector)
+            vector_meta[recipe_id] = {
+                "title": info["title"],
+                "difficulty": info["difficulty"],
+                "cook_time_minutes": info["cook_time_minutes"],
+            }
+        return vector_terms, vector_meta, None
 
     def _lookup_recipes(self, urls: list[str]) -> dict[str, dict]:
         if not urls:

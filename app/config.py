@@ -73,6 +73,15 @@ class Settings(BaseSettings):
     # P2 食材联想向量库
     chroma_ingredients_collection: str = "ingredients_docs"
 
+    # P6.1 性能优化：推荐结果内存 TTL 缓存（0=关闭；单进程 uvicorn 内生效，
+    # 多 worker 时各进程独立缓存；仅缓存非降级结果，故障不会被“粘住”）
+    recommend_cache_ttl_seconds: float = 600.0
+    recommend_cache_max_entries: int = 256
+
+    # P6.1 性能优化：启动时后台预热检索（BM25 语料 + Chroma 集合），
+    # 避免首个用户承担冷启动（实测冷启动可达 30-60s，前端 recommend 超时 30s）
+    warmup_on_startup: bool = True
+
     # P5 限流（slowapi；默认关闭，本地/测试/压测不打扰，生产开启）
     rate_limit_enabled: bool = False
     rate_limit_storage: str = "memory"  # memory | redis

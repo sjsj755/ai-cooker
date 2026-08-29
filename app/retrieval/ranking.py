@@ -111,6 +111,12 @@ class RankingService:
         notice = getattr(self._retriever, "last_notice", None)
         return RankResult(ranked, degraded, notice)
 
+    async def warmup(self) -> None:
+        """P6.1 启动预热：委托检索器构建 BM25 语料与 Chroma 集合。"""
+        warmup = getattr(self._retriever, "warmup", None)
+        if warmup is not None:
+            await warmup()
+
     def _excluded_ids(
         self, recipe_ids: list[int], tag_names: list[str]
     ) -> set[int]:
