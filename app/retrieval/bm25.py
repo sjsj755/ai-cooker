@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from collections.abc import Callable
 from typing import Any
 
@@ -54,18 +55,7 @@ def build_text(row: dict[str, Any]) -> str:
 def load_recipe_rows(session_factory: Callable = SessionLocal):
     """从 MySQL 加载语料行与缓存探针 (COUNT(*), MAX(id), MAX(updated_at))。"""
     with session_factory() as session:
-        count, max_id, max_updated = session.execute(
-            select(
-                func.count(Recipe.id),
-                func.coalesce(func.max(Recipe.id), 0),
-                func.max(Recipe.updated_at),
-            )
-        ).one()
-        probe = (
-            int(count),
-            int(max_id),
-            max_updated.isoformat() if max_updated else None,
-        )
+        probe = corpus_probe(session_factory=session_factory, session=session)
         recipe_rows = session.execute(
             select(
                 Recipe.id,
@@ -117,6 +107,31 @@ def load_recipe_rows(session_factory: Callable = SessionLocal):
     return list(by_id.values()), probe
 
 
+def corpus_probe(
+    session_factory: Callable = SessionLocal, session=None
+) -> tuple:
+    """轻量缓存探针 (COUNT(*), MAX(id), MAX(updated_at))：内容未变则跳过全量重载。"""
+    if session is None:
+        with session_factory() as session:
+            return _corpus_probe_in_session(session)
+    return _corpus_probe_in_session(session)
+
+
+def _corpus_probe_in_session(session) -> tuple:
+    count, max_id, max_updated = session.execute(
+        select(
+            func.count(Recipe.id),
+            func.coalesce(func.max(Recipe.id), 0),
+            func.max(Recipe.updated_at),
+        )
+    ).one()
+    return (
+        int(count),
+        int(max_id),
+        max_updated.isoformat() if max_updated else None,
+    )
+
+
 class BM25Corpus:
     """语料缓存 + 搜索；探针变化或上次构建失败时自动重建（双缓冲 + 锁）。"""
 
@@ -126,10 +141,21 @@ class BM25Corpus:
         *,
         session_factory: Callable = SessionLocal,
         loader: Loader | None = None,
+        probe_loader: Callable[[], tuple] | None = None,
+        probe_ttl_seconds: float = 1.0,
     ) -> None:
         self._settings = settings or get_settings()
         self._session_factory = session_factory
         self._loader = loader or (lambda: load_recipe_rows(session_factory))
+        # 自定义 loader（隔离语料）不启用探针快路径，保持既有全量重载语义；
+        # 默认 loader 配轻量探针：语料未变时每请求只跑 COUNT/MAX 查询，不重载全量行。
+        self._probe_loader = probe_loader
+        if self._probe_loader is None and loader is None:
+            self._probe_loader = lambda: corpus_probe(session_factory)
+        # 探针 TTL：语料内容变化最多延迟 N 秒被感知（仅默认 loader 路径，
+        # 自定义 loader 走全量重载语义；压测下避免每请求 COUNT/MAX 查询）
+        self._probe_ttl_seconds = probe_ttl_seconds
+        self._last_probe_at = 0.0
         self._lock = asyncio.Lock()
         self._built = False
         self._probe: tuple | None = None
@@ -148,6 +174,27 @@ class BM25Corpus:
 
     async def ensure_built(self) -> None:
         """按探针校验并重建；失败态按四态表处理（见 P2 计划）。"""
+        # 快路径：语料已构建且未降级时先跑轻量探针，内容未变直接复用缓存索引，
+        # 避免每请求全量重载 MySQL 语料行（P5 10k/50k 压测门禁的依赖前提）。
+        if self._built and self._degraded_notice is None and self._probe_loader is not None:
+            if time.monotonic() - self._last_probe_at < self._probe_ttl_seconds:
+                return  # TTL 内跳过探针查询，直接复用缓存索引
+            # 先盖时间戳再 await：并发请求共享同一探针窗口，避免全员同时打 COUNT/MAX
+            self._last_probe_at = time.monotonic()
+            try:
+                probe = await asyncio.to_thread(self._probe_loader)
+            except Exception as exc:  # noqa: BLE001 - 探针失败回退缓存并降级提示
+                self._degraded_notice = "关键词索引更新失败，已回退缓存数据"
+                log_event(
+                    self._logger,
+                    logging.ERROR,
+                    "retrieval.corpus.probe_failed",
+                    error=f"{type(exc).__name__}: {exc}",
+                    degraded=True,
+                )
+                return
+            if probe == self._probe:
+                return
         try:
             rows, probe = await asyncio.to_thread(self._loader)
         except Exception as exc:  # noqa: BLE001 - 统一按 MySQL 故障处理

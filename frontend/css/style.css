@@ -541,6 +541,23 @@ body.drawer-open {
   margin-top: 0;
 }
 
+/* P5 反馈按钮：收藏 / 不喜欢；已提交 disabled + aria-pressed 高亮 */
+.feedback-btn {
+  padding: 6px 14px;
+  font-size: 13px;
+}
+
+.feedback-btn[aria-pressed="true"] {
+  border-color: var(--color-primary);
+  color: var(--color-primary-dark);
+  background: var(--color-soft-bg);
+}
+
+.feedback-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.75;
+}
+
 /* 错误 / 空态 */
 .error-box {
   background: var(--color-error-bg);

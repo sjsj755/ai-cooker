@@ -242,3 +242,43 @@ def test_frontend_api_paths_match_backend_contract():
     assert "/api/recipes/{recipe_id}" in paths
     assert "/api/ingredients/search" in paths
     assert "/api/tags" in paths
+
+
+# ---------- P5 反馈闭环契约 ----------
+
+
+def test_feedback_buttons_contract():
+    """P5：反馈按钮存在、aria-pressed 同步、请求走 POST /api/feedback。"""
+    ui_js = _read_js("ui.js")
+    recommend_js = _read_js("recommend.js")
+    search_js = _read_js("search.js")
+
+    # ui.js：按钮渲染 + 状态同步 + 回调入参
+    assert "feedback-btn" in ui_js
+    assert "aria-pressed" in ui_js
+    assert "onFeedback" in ui_js
+    assert "feedbackState" in ui_js
+    assert "收藏" in ui_js
+    assert "不喜欢" in ui_js
+
+    # 两页脚本：feedback 任务类型 + 状态持有 + 请求路径
+    for page_js in (recommend_js, search_js):
+        assert 'run("feedback"' in page_js
+        assert "/api/feedback" in page_js
+        assert "feedbackByRecipe" in page_js
+        assert "lastFeedbackRetry" in page_js
+
+    # 与后端路由表比对
+    from app.main import app
+
+    assert "/api/feedback" in app.openapi()["paths"]
+
+
+def test_feedback_buttons_no_dangerous_dom_api():
+    """反馈实现沿用 createElement + textContent，无危险 DOM API（含新代码）。"""
+    ui_js = _read_js("ui.js")
+    recommend_js = _read_js("recommend.js")
+    search_js = _read_js("search.js")
+    for content in (ui_js, recommend_js, search_js):
+        for pattern in DANGEROUS_DOM_PATTERNS:
+            assert pattern not in content

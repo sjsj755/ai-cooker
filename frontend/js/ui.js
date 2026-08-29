@@ -184,9 +184,12 @@ const UI = (() => {
    * 结果卡片：推荐主页内联展示缺料 / 难度 / 时长，步骤折叠（一次只展开一张）；
    * 搜索页传 options.onDetail 时附加“查看详情”按钮（不渲染步骤）。
    * 匹配度徽章按本批 match_score 最高分归一为相对百分比（RRF 融合分绝对量纲极小）。
-   * options: { expandedId, onToggleSteps, onDetail }
+   * options: { expandedId, onToggleSteps, onDetail, onFeedback, feedbackState }
    * - expandedId：当前展开的 recipe_id（hidden / aria-expanded 按它推导）；
    * - onToggleSteps(recipe)：点击“做法”按钮回调（页面脚本更新展开状态后全量重渲染）；
+   * - onFeedback(recipe, action)：点击收藏 / 不喜欢回调（P5 反馈闭环）；
+   * - feedbackState：Map(recipe_id → 'like'|'dislike')，已反馈菜谱按钮 disabled +
+   *   aria-pressed 同步；
    * - 展开容器常驻 hidden，aria-controls 恒指向它；重建后由页面脚本按 data-toggle-id 恢复焦点。
    */
   function renderCards(container, recipes, options = {}) {
@@ -259,6 +262,9 @@ const UI = (() => {
         detailBtn.addEventListener("click", () => options.onDetail(recipe));
         actions.append(detailBtn);
       }
+      if (typeof options.onFeedback === "function") {
+        renderFeedbackButtons(actions, recipe, options);
+      }
       if (actions.childNodes.length > 0) {
         card.append(actions);
       }
@@ -266,6 +272,29 @@ const UI = (() => {
         card.append(stepsWrap);
       }
       container.append(card);
+    });
+  }
+
+  /** 反馈操作按钮（P5）：收藏 / 不喜欢；提交成功后 disabled + aria-pressed 同步。 */
+  function renderFeedbackButtons(actions, recipe, options) {
+    const state =
+      options.feedbackState instanceof Map ? options.feedbackState : new Map();
+    const current = state.get(recipe.recipe_id);
+    ["like", "dislike"].forEach((action) => {
+      const btn = el(
+        "button",
+        "btn ghost feedback-btn",
+        action === "like" ? "收藏" : "不喜欢"
+      );
+      btn.type = "button";
+      btn.setAttribute("data-recipe-id", String(recipe.recipe_id));
+      btn.setAttribute("data-action", action);
+      btn.setAttribute("aria-pressed", current === action ? "true" : "false");
+      if (current) {
+        btn.disabled = true;
+      }
+      btn.addEventListener("click", () => options.onFeedback(recipe, action));
+      actions.append(btn);
     });
   }
 

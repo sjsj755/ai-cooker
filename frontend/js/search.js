@@ -1,6 +1,6 @@
 /**
  * 搜索页逻辑：持有自身 chips / 联想 / 忌口 / q / limit 等业务状态，
- * ui.js 仅做无状态渲染。任务类型 registry：{tags, autocomplete, search, detail}。
+ * ui.js 仅做无状态渲染。任务类型 registry：{tags, autocomplete, search, detail, feedback}。
  */
 "use strict";
 
@@ -24,6 +24,9 @@
   let limit = 10;
   let pending = false;
   let debounceTimer = null;
+  let results = []; // 最近一次检索结果（反馈成功后重渲染的数据源）
+  let feedbackByRecipe = new Map(); // recipe_id → 'like'|'dislike'（已成功提交的反馈）
+  let lastFeedbackRetry = null; // {recipe, action}：反馈失败后的重试上下文
 
   const els = {
     chips: document.getElementById("search-ingredient-chips"),
@@ -277,10 +280,13 @@
           degraded: !!payload.degraded,
           notice: payload.notice,
         });
-        UI.renderCards(els.cards, payload.recipes || [], {
+        results = payload.recipes || [];
+        UI.renderCards(els.cards, results, {
           onDetail: (recipe) => detail.open(recipe),
+          onFeedback: submitFeedback,
+          feedbackState: feedbackByRecipe,
         });
-        if (!payload.recipes || payload.recipes.length === 0) {
+        if (results.length === 0) {
           UI.renderEmpty(
             els.empty,
             payload.notice || "未找到匹配菜谱，试试调整关键词或放宽条件"
@@ -309,6 +315,52 @@
     submitSearch();
   }
 
+  // ---- 反馈（收藏 / 不喜欢，P5）----
+  function submitFeedback(recipe, action) {
+    const recipeId = recipe && recipe.recipe_id;
+    if (!recipeId || feedbackByRecipe.has(recipeId)) {
+      return; // 已反馈过：按钮 disabled，重复点击忽略
+    }
+    registry
+      .run("feedback", (signal) =>
+        Api.requestJson("/api/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ recipe_id: recipeId, action }),
+          signal,
+        })
+      )
+      .then(() => {
+        clearFormError();
+        feedbackByRecipe.set(recipeId, action);
+        UI.renderCards(els.cards, results || [], {
+          onDetail: (recipe) => detail.open(recipe),
+          onFeedback: submitFeedback,
+          feedbackState: feedbackByRecipe,
+        });
+      })
+      .catch((err) => {
+        if (err.type === "aborted") {
+          return;
+        }
+        lastFeedbackRetry = { recipe, action };
+        UI.renderError(els.error, {
+          type: err.type,
+          message: err.message,
+          onRetry: retryFeedback,
+        });
+      });
+  }
+
+  function retryFeedback() {
+    if (!lastFeedbackRetry) {
+      return;
+    }
+    const { recipe, action } = lastFeedbackRetry;
+    lastFeedbackRetry = null;
+    submitFeedback(recipe, action);
+  }
+
   // ---- 清空 ----
   function clearAll() {
     registry.abort("search");
@@ -319,6 +371,10 @@
     selectedTagIds = new Set();
     q = "";
     pending = false;
+    results = [];
+    feedbackByRecipe = new Map();
+    lastFeedbackRetry = null;
+    registry.abort("feedback");
     clearFormError();
     els.banner.textContent = "";
     els.cards.textContent = "";

@@ -1,0 +1,40 @@
+{
+  "inputs": {
+    "candidates": [
+      {"recipe_id": 1},
+      {"recipe_id": 2}
+    ]
+  },
+  "output": {
+    "recommendations": [
+      {
+        "recipe_id": 1,
+        "title": "",
+        "match_score": 0.0,
+        "missing_ingredients": [],
+        "difficulty": null,
+        "cook_time_minutes": null,
+        "steps": [
+          {"instruction": "将食材按菜谱步骤处理切配，备好所需调料", "minutes": 10},
+          {"instruction": "中小火烹饪至熟透，调味后出锅装盘", "minutes": 10}
+        ],
+        "tips": "小贴士：按家中现有食材灵活调整用量，火候以中小火为宜，出锅前尝味再补盐，避免过咸。",
+        "seasonings": []
+      },
+      {
+        "recipe_id": 2,
+        "title": "",
+        "match_score": 0.0,
+        "missing_ingredients": [],
+        "difficulty": null,
+        "cook_time_minutes": null,
+        "steps": [
+          {"instruction": "将食材按菜谱步骤处理切配，备好所需调料", "minutes": 10},
+          {"instruction": "中小火烹饪至熟透，调味后出锅装盘", "minutes": 10}
+        ],
+        "tips": "小贴士：按家中现有食材灵活调整用量，火候以中小火为宜，出锅前尝味再补盐，避免过咸。",
+        "seasonings": []
+      }
+    ]
+  }
+}

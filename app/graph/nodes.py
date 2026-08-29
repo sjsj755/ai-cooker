@@ -17,6 +17,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.core.llm import LLMProvider
 from app.core.logging import get_logger, log_event
+from app.core.mock_llm import MockLLMProvider
 from app.core.openai_llm import LLMConfigError, OpenAICompatibleLLM
 from app.core.retriever import RecipeCandidate
 from app.db.session import SessionLocal
@@ -49,8 +50,11 @@ def degrade_end_node(state: CookState) -> CookState:
 
 @lru_cache
 def get_llm_provider() -> LLMProvider | None:
-    """真实 LLM 提供者；无 key 或配置错误返回 None（调用方走降级）。"""
+    """LLM 提供者；LLM_MOCK=true 返回 MockLLMProvider（零网络确定性），
+    否则无 key 或配置错误返回 None（调用方走降级）。"""
     settings = get_settings()
+    if settings.llm_mock:
+        return MockLLMProvider()
     if not settings.llm_api_key:
         return None
     try:

@@ -13,7 +13,7 @@
 | `recipe_ingredients` | 菜谱 ↔ 食材（多对多） | 联合主键 + 级联删除 | 0 |
 | `tags` | 标签词典（过敏原/忌口/菜系/口味） | `name` 唯一 | 5 |
 | `recipe_tags` | 菜谱 ↔ 标签（多对多） | 联合主键 + 级联删除 | 0 |
-| `user_feedback` | 用户反馈（收藏 / 不喜欢） | `recipe_id` 可空，删除置 NULL | 0 |
+| `user_feedback` | 用户反馈（收藏 / 不喜欢） | `recipe_id` 可空，删除置 NULL；`(recipe_id, client_fingerprint, action)` 唯一 | 0 |
 
 ## 2. 关系图（ER）
 
@@ -135,10 +135,12 @@ erDiagram
 |---|---|---|---|---|
 | `id` | INT | 是 | AUTO_INCREMENT | 主键 |
 | `recipe_id` | INT | 否 | NULL | 菜谱 ID，FK（菜谱删除时置 NULL）；匿名化后可为 NULL |
+| `client_fingerprint` | VARCHAR(64) | 否* | NULL | 匿名指纹 `SHA-256(IP + FEEDBACK_SALT)`（64 位十六进制，不落明文 IP）；历史行为 NULL，P5 起新写入必填 |
 | `action` | VARCHAR(20) | 是 | — | 行为：`like` / `dislike` |
 | `created_at` | DATETIME | 是 | `now()` | 创建时间 |
 
-索引：`PRIMARY KEY (id)`、二级索引 `(recipe_id)`。
+索引：`PRIMARY KEY (id)`、`UNIQUE (recipe_id, client_fingerprint, action)`
+（幂等：同 (recipe, fingerprint, action) 重复提交 200 不新增行；切换 action 允许新增行）。
 
 ## 4. 约束与删除策略汇总
 

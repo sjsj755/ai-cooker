@@ -50,16 +50,23 @@ class HybridRetriever(Retriever):
         self._enable_vector = enable_vector
         self._logger = get_logger("app.retrieval")
         self.last_notice: str | None = None
+        self._last_degraded_reason: str | None = None
 
     def _get_chroma(self) -> ChromaStore:
         if self._chroma is not None:
             return self._chroma
-        return ChromaStore(self._settings)
+        # P5 压测：实例内缓存 ChromaStore，避免每请求重建持久化客户端
+        self._chroma = ChromaStore(self._settings)
+        return self._chroma
 
     def _get_corpus(self) -> BM25Corpus:
         if self._corpus is not None:
             return self._corpus
-        return BM25Corpus(settings=self._settings, session_factory=self._session_factory)
+        # P5 压测：实例内缓存 BM25Corpus，避免每请求全量重建索引
+        self._corpus = BM25Corpus(
+            settings=self._settings, session_factory=self._session_factory
+        )
+        return self._corpus
 
     def _get_embeddings(self):
         if self._embeddings is not None:
@@ -99,13 +106,22 @@ class HybridRetriever(Retriever):
             degraded=degraded,
             degraded_reason=reason,
         )
-        if degraded and reason:
+        # 降级原因（如无 embedding key）是静态配置态：仅首次/变化时告警一次，
+        # 避免 BM25-only 压测下每请求刷 WARNING（日志 I/O 也计入 P95）。
+        if (
+            degraded
+            and reason
+            and reason != self._last_degraded_reason
+        ):
             log_event(
                 self._logger,
                 logging.WARNING,
                 "retrieval.query.degraded",
                 degraded_reason=reason,
             )
+            self._last_degraded_reason = reason
+        elif not degraded:
+            self._last_degraded_reason = None
         return candidates
 
     async def _retrieve(
@@ -136,14 +152,18 @@ class HybridRetriever(Retriever):
         vector_meta: dict[int, dict] = {}
         vector_degraded_reason: str | None = None
         embeddings = self._get_embeddings()
-        chroma = self._get_chroma()
         if not self._enable_vector:
             vector_degraded_reason = "向量路未启用，仅关键词检索"
         elif embeddings is None:
             vector_degraded_reason = "EMBEDDING_API_KEY 未配置，已回退关键词检索"
-        elif chroma.count() == 0:
-            vector_degraded_reason = "Chroma 集合为空，已回退关键词检索"
         else:
+            # 只有真正要跑向量路时才触碰 Chroma（避免 BM25-only 每请求 count 开销）
+            chroma = self._get_chroma()
+            if chroma.count() == 0:
+                vector_degraded_reason = "Chroma 集合为空，已回退关键词检索"
+                chroma = None
+        if embeddings is not None and vector_degraded_reason is None:
+            chroma = self._get_chroma()
             try:
                 query_vectors = await embeddings.embed_texts([query])
                 hits = await chroma.query(

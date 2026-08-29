@@ -1,0 +1,16 @@
+# LLM 输出 fixture 权威元数据（机器可读，tomllib 解析；README 仅人工说明）
+# 必填字段：schema_version / collection_date / model / capture.script
+
+schema_version = 1
+collection_date = "2026-08-29"
+
+[model]
+provider = "openai-compatible"
+name = "mock-sample"
+
+[capture]
+script = "scripts/capture_llm_fixtures.py"
+params = "samples=4; 未配置 LLM_API_KEY 时仅生成结构样例，配置 key 后重跑刷新真实输出"
+
+[desensitization]
+note = "样例为合成 / 脱敏数据，不含真实用户个人信息；真实采集前请人工复核"

@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.config import get_settings  # noqa: E402
 from app.core.crawler import CrawledIngredient, CrawledRecipe  # noqa: E402
 from app.core.embeddings import EmbeddingProvider  # noqa: E402
+from app.core.langsmith_trace import maybe_trace  # noqa: E402
 from app.core.logging import setup_logging  # noqa: E402
 from app.ingestion.text_builder import chunk_recipe  # noqa: E402
 from app.retrieval.bm25 import BM25Corpus, build_text, load_recipe_rows, tokenize  # noqa: E402
@@ -178,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fake-vector", action="store_true", help="用伪嵌入+临时 Chroma 做离线混合对比")
     parser.add_argument("--bench-rows", type=int, default=0, help="额外写入 N 条合成菜谱并计时")
     parser.add_argument("--min-recall", type=float, default=0.7, help="recall@5 门禁，低于则退出码 1")
+    parser.add_argument("--trace", action="store_true", help="上传 runs 到 LangSmith（无 key 跳过）")
     args = parser.parse_args(argv)
     settings = get_settings()
     setup_logging(settings.log_level)
@@ -189,6 +191,7 @@ def main(argv: list[str] | None = None) -> int:
     rows, probe = load_recipe_rows()
     texts = {r["recipe_id"]: build_text(r) for r in rows}
     cases = build_cases(50)
+    evaluate = maybe_trace(evaluate, "eval_retrieval", args.trace)
 
     bm25_only = HybridRetriever(settings, enable_vector=False)
     recall_b, cov_b, used_b = evaluate(bm25_only, cases, texts)

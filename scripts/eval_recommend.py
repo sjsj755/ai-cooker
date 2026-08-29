@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import get_settings  # noqa: E402
+from app.core.langsmith_trace import maybe_trace  # noqa: E402
 from app.core.logging import setup_logging  # noqa: E402
 from app.graph.nodes import get_llm_provider, link_node, parse_node  # noqa: E402
 from app.graph.state import CookState, empty_state  # noqa: E402
@@ -53,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--min-accuracy", type=float, default=0.85, help="项级准确率门禁（默认 0.85）"
     )
+    parser.add_argument("--trace", action="store_true", help="上传 runs 到 LangSmith（无 key 跳过）")
     args = parser.parse_args(argv)
     settings = get_settings()
     setup_logging(settings.log_level)
@@ -61,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         print("跳过：未配置 LLM_API_KEY，无法运行识别评测")
         return 0
 
+    run_case = maybe_trace(run_case, "eval_recommend", args.trace)
     total = hits = 0
     print(f"识别评测（{len(EVAL_CASES)} 条用例）")
     for raw, expected in EVAL_CASES:

@@ -1,11 +1,13 @@
-"""POST /api/recipes/recommend：P3 接入 LangGraph 完整工作流。"""
+"""POST /api/recipes/recommend：P3 接入 LangGraph 完整工作流（P5 限流桶 10/min）。"""
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from app.core.html_clean import clean_text
 from app.core.logging import get_logger, log_event
+from app.core.rate_limit import build_limiter, make_route_limit
+from app.config import get_settings
 from app.graph.state import empty_state
 from app.graph.workflow import build_graph
 from app.retrieval.errors import RetrievalUnavailableError
@@ -13,10 +15,14 @@ from app.schemas.recommend import RecommendRequest, RecommendResponse
 
 router = APIRouter()
 logger = get_logger("app.api.recommend")
+_route_limit = make_route_limit(build_limiter(get_settings()))
 
 
 @router.post("/recommend", response_model=RecommendResponse, status_code=200)
-async def recommend(payload: RecommendRequest) -> RecommendResponse:
+@_route_limit(f"{get_settings().rate_limit_recommend_per_minute}/minute")
+async def recommend(
+    payload: RecommendRequest, request: Request
+) -> RecommendResponse:
     """推荐：LLM 识别 → 四级映射 → 检索排序 → LLM 生成（可降级直出原文）。"""
     if not any(clean_text(item) for item in payload.ingredients):
         raise HTTPException(status_code=400, detail="食材列表不能为空")

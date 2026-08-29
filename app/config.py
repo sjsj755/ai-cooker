@@ -71,6 +71,24 @@ class Settings(BaseSettings):
     # P2 食材联想向量库
     chroma_ingredients_collection: str = "ingredients_docs"
 
+    # P5 限流（slowapi；默认关闭，本地/测试/压测不打扰，生产开启）
+    rate_limit_enabled: bool = False
+    rate_limit_storage: str = "memory"  # memory | redis
+    rate_limit_redis_url: str = ""
+    rate_limit_default_per_minute: int = 100
+    rate_limit_recommend_per_minute: int = 10
+    rate_limit_feedback_per_minute: int = 20
+
+    # P5 mock LLM（LLM_MOCK=true 时 get_llm_provider 返回 MockLLMProvider：
+    # 零网络 IO、确定性输出，供 CI / k6 压测使用）
+    llm_mock: bool = False
+
+    # P5 反馈匿名指纹盐（SHA-256(IP + FEEDBACK_SALT)；生产必须由 start.sh 强校验非空）
+    feedback_salt: str = ""
+
+    # P5 LangSmith 评测（可选；无 key 时 eval --trace 跳过）
+    langsmith_api_key: str | None = None
+
     @model_validator(mode="after")
     def _validate_retrieval_config(self) -> "Settings":
         if self.retrieval_fusion_rrf_k <= 0:
@@ -80,6 +98,15 @@ class Settings(BaseSettings):
             raise ValueError(
                 "RETRIEVAL_BM25_WEIGHT 与 RETRIEVAL_VECTOR_WEIGHT 之和必须为 1"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _validate_rate_limit_config(self) -> "Settings":
+        """限流配置校验（fail-fast）：storage 枚举 + redis 必须配 URL。"""
+        if self.rate_limit_storage not in {"memory", "redis"}:
+            raise ValueError("RATE_LIMIT_STORAGE 必须为 memory 或 redis")
+        if self.rate_limit_storage == "redis" and not self.rate_limit_redis_url:
+            raise ValueError("RATE_LIMIT_STORAGE=redis 时必须配置 RATE_LIMIT_REDIS_URL")
         return self
 
 

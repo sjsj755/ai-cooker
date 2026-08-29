@@ -10,9 +10,9 @@
 
 Python 3.14 + uv · FastAPI · SQLAlchemy 2.x + Alembic · LangGraph · MySQL 8.x（InnoDB + utf8mb4）· pytest
 
-## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）→ P2 检索层（已完成）→ P3 LangGraph 工作流（已完成，2026-08-29 验收通过）→ P4 前端（已完成，2026-08-29 验收通过：191 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_PLAN.md](docs/P4_PLAN.md)）→ P4.1 前端视觉与交互优化（已完成，2026-08-29 验收通过：194 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md)）→ P4.2 推荐页详情抽屉 + 食材/调料区分 + 感知性能优化（已完成，2026-08-29 验收通过：200 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_2_PLAN.md](docs/P4_2_PLAN.md)）
+## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）→ P2 检索层（已完成）→ P3 LangGraph 工作流（已完成，2026-08-29 验收通过）→ P4 前端（已完成，2026-08-29 验收通过：191 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_PLAN.md](docs/P4_PLAN.md)）→ P4.1 前端视觉与交互优化（已完成，2026-08-29 验收通过：194 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md)）→ P4.2 推荐页详情抽屉 + 食材/调料区分 + 感知性能优化（已完成，2026-08-29 验收通过：200 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_2_PLAN.md](docs/P4_2_PLAN.md)）→ P5 全量验收 + 用户反馈闭环（已完成，2026-08-29 验收通过：240 测试全绿 + 6 条 Playwright 冒烟 + k6 10k 门禁通过 + 50k 基线留痕；实施计划与验收结果见 [docs/P5_PLAN.md](docs/P5_PLAN.md)）
 
-P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档见 [docs/P1_COLLECTION_DESIGN.md](docs/P1_COLLECTION_DESIGN.md)；P2 检索层实施计划见 [docs/P2_PLAN.md](docs/P2_PLAN.md)；P3 LangGraph 工作流实施计划见 [docs/P3_PLAN.md](docs/P3_PLAN.md)；P4 前端实施计划见 [docs/P4_PLAN.md](docs/P4_PLAN.md)；P4.1 前端视觉与交互优化实施计划见 [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md)。
+P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档见 [docs/P1_COLLECTION_DESIGN.md](docs/P1_COLLECTION_DESIGN.md)；P2 检索层实施计划见 [docs/P2_PLAN.md](docs/P2_PLAN.md)；P3 LangGraph 工作流实施计划见 [docs/P3_PLAN.md](docs/P3_PLAN.md)；P4 前端实施计划见 [docs/P4_PLAN.md](docs/P4_PLAN.md)；P4.1 前端视觉与交互优化实施计划见 [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md)；P5 全量验收与用户反馈闭环实施计划见 [docs/P5_PLAN.md](docs/P5_PLAN.md)。
 
 ### P1（parse）交付物
 

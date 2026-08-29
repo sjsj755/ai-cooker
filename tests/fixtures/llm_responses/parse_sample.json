@@ -1,0 +1,11 @@
+{
+  "inputs": ["两个土豆、三颗鸡蛋"],
+  "outputs": [
+    {
+      "items": [
+        {"name": "土豆", "quantity": "两个", "unit": null},
+        {"name": "鸡蛋", "quantity": "三颗", "unit": null}
+      ]
+    }
+  ]
+}

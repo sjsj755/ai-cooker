@@ -29,9 +29,22 @@ class MissingIngredientsCalculator:
         if not ids:
             return {}
 
+        # 缺料计算两查询合并为一次会话（单连接 checkout），
+        # 降低并发下的连接往返开销（P5 压测：10 VU 时每查询 ~25-50ms）。
         with self._session_factory() as session:
             dict_rows = session.execute(
                 select(Ingredient.id, Ingredient.name, Ingredient.aliases)
+            ).all()
+            rows = session.execute(
+                select(
+                    RecipeIngredient.recipe_id,
+                    RecipeIngredient.ingredient_id,
+                    RecipeIngredient.is_essential,
+                    Ingredient.name,
+                    Ingredient.category,
+                )
+                .join(Ingredient, Ingredient.id == RecipeIngredient.ingredient_id)
+                .where(RecipeIngredient.recipe_id.in_(ids))
             ).all()
 
         by_name: dict[str, int] = {}
@@ -56,19 +69,6 @@ class MissingIngredientsCalculator:
                 available_ids.add(by_alias[name])
             else:
                 unresolved.add(name)
-
-        with self._session_factory() as session:
-            rows = session.execute(
-                select(
-                    RecipeIngredient.recipe_id,
-                    RecipeIngredient.ingredient_id,
-                    RecipeIngredient.is_essential,
-                    Ingredient.name,
-                    Ingredient.category,
-                )
-                .join(Ingredient, Ingredient.id == RecipeIngredient.ingredient_id)
-                .where(RecipeIngredient.recipe_id.in_(ids))
-            ).all()
 
         result: dict[int, MissingInfo] = {}
         for recipe_id in ids:

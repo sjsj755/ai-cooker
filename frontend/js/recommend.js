@@ -1,6 +1,6 @@
 /**
  * 推荐主页逻辑：持有 chips / 联想 / 忌口选中等业务状态（唯一事实来源），
- * ui.js 仅做无状态渲染。任务类型 registry：{tags, autocomplete, recommend}。
+ * ui.js 仅做无状态渲染。任务类型 registry：{tags, autocomplete, recommend, feedback}。
  */
 "use strict";
 
@@ -28,6 +28,8 @@
   let expandedCardId = null; // 当前展开做法的菜谱 id（一次只展开一张，null 为全部收起）
   let results = []; // 最近一次推荐结果（折叠切换重渲染的数据源）
   let lastRenderedResults = null; // 上次全量渲染的 results 引用（浅比较，数据未变则增量切换）
+  let feedbackByRecipe = new Map(); // recipe_id → 'like'|'dislike'（已成功提交的反馈）
+  let lastFeedbackRetry = null; // {recipe, action}：反馈失败后的重试上下文
 
   const els = {
     chips: document.getElementById("ingredient-chips"),
@@ -121,7 +123,51 @@
       expandedId: expandedCardId,
       onToggleSteps: toggleSteps,
       onDetail: (recipe) => detail.open(recipe),
+      onFeedback: submitFeedback,
+      feedbackState: feedbackByRecipe,
     });
+  }
+
+  // ---- 反馈（收藏 / 不喜欢，P5）----
+  function submitFeedback(recipe, action) {
+    const recipeId = recipe && recipe.recipe_id;
+    if (!recipeId || feedbackByRecipe.has(recipeId)) {
+      return; // 已反馈过：按钮 disabled，重复点击忽略
+    }
+    registry
+      .run("feedback", (signal) =>
+        Api.requestJson("/api/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ recipe_id: recipeId, action }),
+          signal,
+        })
+      )
+      .then(() => {
+        clearFormError();
+        feedbackByRecipe.set(recipeId, action);
+        renderCards();
+      })
+      .catch((err) => {
+        if (err.type === "aborted") {
+          return;
+        }
+        lastFeedbackRetry = { recipe, action };
+        UI.renderError(els.error, {
+          type: err.type,
+          message: err.message,
+          onRetry: retryFeedback,
+        });
+      });
+  }
+
+  function retryFeedback() {
+    if (!lastFeedbackRetry) {
+      return;
+    }
+    const { recipe, action } = lastFeedbackRetry;
+    lastFeedbackRetry = null;
+    submitFeedback(recipe, action);
   }
 
   function toggleSteps(recipe) {
@@ -364,6 +410,9 @@
     expandedCardId = null;
     results = [];
     lastRenderedResults = null;
+    feedbackByRecipe = new Map();
+    lastFeedbackRetry = null;
+    registry.abort("feedback");
     clearFormError();
     els.banner.textContent = "";
     els.cards.textContent = "";

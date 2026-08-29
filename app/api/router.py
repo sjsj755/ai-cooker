@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from app.api.routes.feedback import router as feedback_router
 from app.api.routes.health import router as health_router
 from app.api.routes.ingredients import router as ingredients_router
 from app.api.routes.recipes import router as recipes_router
@@ -14,3 +15,4 @@ api_router.include_router(ingredients_router, prefix="/api/ingredients", tags=["
 api_router.include_router(recommend_router, prefix="/api/recipes", tags=["recipes"])
 api_router.include_router(recipes_router, prefix="/api/recipes", tags=["recipes"])
 api_router.include_router(tags_router, prefix="/api/tags", tags=["tags"])
+api_router.include_router(feedback_router, prefix="/api/feedback", tags=["feedback"])

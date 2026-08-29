@@ -117,6 +117,24 @@ def smoke(page) -> None:
     expect(seasonings_row).to_be_visible()
     expect(seasonings_row.locator(".chip-seasoning")).to_have_count(2)
 
+    # P5：反馈闭环——收藏提交成功后按钮 disabled + aria-pressed=true（请求 mock）。
+    # 放在抽屉交互之前，避免抽屉遮罩拦截点击。
+    def mock_feedback(route):
+        route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps({"id": 1}, ensure_ascii=False),
+        )
+
+    page.route("**/api/feedback", mock_feedback)
+    like_btn = first_card.locator('.feedback-btn[data-action="like"]')
+    dislike_btn = first_card.locator('.feedback-btn[data-action="dislike"]')
+    like_btn.click()
+    expect(like_btn).to_be_disabled()
+    expect(like_btn).to_have_attribute("aria-pressed", "true")
+    expect(dislike_btn).to_be_disabled()
+    expect(dislike_btn).to_have_attribute("aria-pressed", "false")
+
     # P4.2：查看详情 → 先出加载骨架，数据返回后展示食材 / 调料区块
     detail_payload = {
         "id": 1,
@@ -154,6 +172,7 @@ def smoke(page) -> None:
 
     page.unroute("**/api/recipes/recommend")
     page.unroute("**/api/recipes/1")
+    page.unroute("**/api/feedback")
 
 
 def main() -> None:
