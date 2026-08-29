@@ -1,6 +1,6 @@
 # P1 数据采集阶段设计文档（仅 parse）
 
-> 状态：**已实施（parse，2026-08-29 验收）**。本文档为 P1 采集阶段的设计依据与实施记录，覆盖：下厨房适配器、HTML 解析与清洗、食材/调料分流、JSON 落盘、断点续采、CLI；**ingest（入库 MySQL/Chroma）不在本阶段范围**，但 JSON 格式已按 [docs/P1_PLAN.md](P1_PLAN.md) §3.3 预留 ingest 消费语义。
+> 状态：**已实施（parse，2026-08-29 验收；ingest 亦已完成，实施与验收见 [docs/P1_PLAN.md](P1_PLAN.md) §11）**。本文档为 P1 采集阶段的设计依据与实施记录，覆盖：下厨房适配器、HTML 解析与清洗、食材/调料分流、JSON 落盘、断点续采、CLI；ingest（入库 MySQL/Chroma）不在此展开，JSON 格式已按 [docs/P1_PLAN.md](P1_PLAN.md) §3.3 预留消费语义。
 >
 > 依据：真实页面抓取与 DOM 检查（2026-08-28，详见 §2）。真实抓取为验收项，测试离线可跑。
 
@@ -26,7 +26,7 @@
 
 ### 1.2 范围外（后续阶段）
 
-- ingest：扫描 JSON → MySQL/Chroma（P1_PLAN §3.2，本期不做）；
+- ingest：扫描 JSON → MySQL/Chroma（已在 P1 内完成，实施与验收见 P1_PLAN §11；本文档不展开）；
 - 检索 / 评分 / 推荐（P2/P3）；
 - LLM 食材识别与四级词典（P3）；
 - 多站点适配器（本期只有下厨房）。

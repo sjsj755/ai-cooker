@@ -20,14 +20,14 @@
 | 编排方式 | LangGraph 有状态工作流 |
 | 菜谱数据 | 公开数据采集（每站点一个 Crawler 适配器） |
 | 忌口偏好 | 基础标签过滤（过敏原 / 忌口 / 菜系 / 口味） |
-| LLM 供应商 | OpenAI 兼容接口（可切换 DeepSeek / Qwen / OpenAI） |
+| LLM 供应商 | OpenAI 兼容接口（可切换 DeepSeek / Qwen / OpenAI / 本地 Ollama 等） |
 | 业务存储 | MySQL 8.x（InnoDB + utf8mb4） |
 | 向量存储 | Chroma 本地持久化（MVP 不并入 MySQL） |
 | 可扩展性 | 接口化 + 扩展点，演进路径预留，MVP 不引入额外中间件 |
 
 ### 1.3 技术栈
 
-Python 3.14 + uv、FastAPI、SQLAlchemy 2.x（当前 2.0.52）+ Alembic、LangChain 生态（LangGraph 1.2.x、langchain-core 1.x、LCEL、EnsembleRetriever、ChatOpenAI、with_structured_output）、Chroma、pytest。实际锁定版本以 `uv.lock` 为准；P3 落地时需按 LangGraph/LangChain 1.x API 核对 `with_structured_output` / `ChatOpenAI` 用法。
+Python 3.14 + uv、FastAPI、SQLAlchemy 2.x（当前 2.0.52）+ Alembic、LangGraph 1.x（仅编排）、Chroma、pytest。LLM 与嵌入均为自研 OpenAI 兼容实现（`app/core/openai_llm.py` / `app/core/openai_embeddings.py`，httpx 直调，`LLM_BASE_URL` / `EMBEDDING_BASE_URL` 可切换 DeepSeek / Qwen / OpenAI / 本地 Ollama 等端点），不依赖 langchain 的 `ChatOpenAI` / `with_structured_output`；`langchain-openai` / `langsmith` 依赖保留，待 P3/P5 评测需要时再消费。实际锁定版本以 `uv.lock` 为准。
 
 ## 2. 总体架构
 
@@ -83,7 +83,7 @@ flowchart TD
 
 ### 2.1 模块职责与扩展方式
 
-- **parse 节点**：LLM 识别自由文本，`with_structured_output` 输出结构化食材列表；模型只通过 `LLMProvider` 接口调用，换模型不改节点逻辑。
+- **parse 节点**：LLM 识别自由文本，经 `LLMProvider.structured(prompt, schema)`（P1 已提供 `OpenAICompatibleLLM` 实现）输出结构化食材列表；模型只通过 `LLMProvider` 接口调用，换模型不改节点逻辑。
 - **词典映射**：LLM 输出按“精确 → 别名 → 包含 → 向量相似”映射到 MySQL 食材词典；未命中标记 `unknown`，走缺料提示，可审核扩充词库。
 - **LangGraph 工作流**：`StateGraph` 定义 `parse → link → filter → retrieve → rank → generate`；新增环节 = 新节点 + 状态 Schema 向后兼容扩展。
 - **检索层**：`retrieve` 只依赖 `Retriever` 接口；MVP 实现 `HybridRetriever`（BM25 + Chroma 向量），数据量增长时新增 Elasticsearch 实现替换。
@@ -125,7 +125,7 @@ flowchart LR
     C -- "是" --> D["重试 3 次（指数退避）<br/>仍失败则跳过并记录"]
     C -- "否" --> E["结构化入库<br/>MySQL（菜谱 / 食材 / 标签）"]
     D --> E
-    E --> F["正文转 Document<br/>RecursiveCharacterTextSplitter"]
+    E --> F["结构语义分块<br/>text_builder（≤500 字）"]
     F --> G["Embeddings<br/>EmbeddingProvider 接口"]
     G --> H["写入 Chroma<br/>持久化向量库"]
 ```
@@ -186,9 +186,9 @@ flowchart LR
 ## 7. 实施阶段
 
 - **P0 基建**：项目结构、docker-compose（MySQL 8.x）、Alembic 迁移、接口抽象层（LLM/Embeddings/Retriever/Scoring/Crawler）、LangGraph 状态与空图骨架、兜底框架（重试计数 + `degraded` 标记）、食材词典种子。**✅ 已完成（2026-08-28），验收记录见 8.7。**
-- **P1 采集管线**：首个 Crawler 适配器 + 清洗 + 断点续采 + MySQL/Chroma 双写 + 嵌入（**修订：两阶段管线 + JSON 中间产物 + 食材/调料分流**）。**⏳ 待实施，实施计划见 [docs/P1_PLAN.md](P1_PLAN.md)。**
+- **P1 采集管线**：首个 Crawler 适配器 + 清洗 + 断点续采 + MySQL/Chroma 双写 + 嵌入 + OpenAI 兼容 LLM/嵌入实现（**修订：两阶段管线 + JSON 中间产物 + 食材/调料分流 + 语义分块**）。**✅ 已完成（2026-08-29），实施计划与验收结果见 [docs/P1_PLAN.md](P1_PLAN.md)。**
 - **P2 检索层**：`HybridRetriever`（BM25 + 向量）+ 默认 `ScoringStrategy`，验证召回质量与耗时基线。
-- **P3 LangGraph 工作流**：LLM 识别节点 + 完整图 + 兜底分支 + 结构化生成 + 推荐 API。
+- **P3 LangGraph 工作流**：LLM 识别节点（复用 `OpenAICompatibleLLM`）+ 完整图 + 兜底分支 + 结构化生成 + 推荐 API。
 - **P4 前端**：Web 输入页、推荐卡片、忌口选择、降级提示展示。
 - **P5 全量验收**：端到端压测、安全回归、LangSmith 评测、扩展点文档。
 
@@ -301,11 +301,11 @@ ai-cooker/
 |---|---|---|
 | “3306 端口可用”假设不成立（本机已有 MySQL 8.0.29） | docker compose 默认端口直接冲突 | ✅ 已整改：compose 端口参数化 `${MYSQL_PORT:-3306}`；README 增加“方式 B：本机 MySQL” |
 | Docker 在受限账户 / 沙箱下不可用 | 计划验收命令不可执行 | ✅ 已绕过：改用本机 MySQL 验收；服务器 / CI 仍可用 Docker，两种方式等价 |
-| LangGraph 版本漂移（计划按 0.2 语义编写） | P3 的 `with_structured_output` / `ChatOpenAI` 需按 1.x 核对 | ✅ 已记录实际版本（1.2.11 / core 1.6.1）；P3 开工前核对 API |
+| LangGraph 版本漂移（计划按 0.2 语义编写） | P3 的 `with_structured_output` / `ChatOpenAI` 需按 1.x 核对 | ✅ 已整改（P1）：LLM 走自研 `OpenAICompatibleLLM`（httpx 直调），不再依赖 langchain `ChatOpenAI` / `with_structured_output`；LangGraph 仅用于编排（1.2.11） |
 | 性能门禁无自动化手段 | P95 基线无法在 CI 拦截 | ⏳ 待办：P5 统一 k6/locust；P0 保持手工基线 |
-| `/health` 语义单一 | DB 故障返回 200 + `degraded`，编排器无法区分存活/就绪 | ⏳ 待办：P1 前拆 liveness（恒 200）与 readiness（DB 故障 503） |
-| 测试库准备未文档化 | 新环境跑 pytest 前需 root 预建 `ai_cooker_test` 并授权 | ✅ 已补 README 说明；⏳ 建议补 `scripts/init_test_db.sql` |
-| 日志 / 告警缺失 | 兜底矩阵承诺的“错误日志告警”未落地 | ⏳ 待办：P1 补结构化 logging 与错误告警 |
+| `/health` 语义单一 | DB 故障返回 200 + `degraded`，编排器无法区分存活/就绪 | ✅ 已由 P1 完成：`/health/live`（恒 200）与 `/health/ready`（DB + Chroma，故障 503） |
+| 测试库准备未文档化 | 新环境跑 pytest 前需 root 预建 `ai_cooker_test` 并授权 | ✅ 已整改（P1）：README 说明 + `scripts/init_test_db.sql` |
+| 日志 / 告警缺失 | 兜底矩阵承诺的“错误日志告警”未落地 | ✅ 已由 P1 完成：`app/core/logging.py` 结构化日志 + parse/ingest 事件日志 |
 | 搜索 `aliases LIKE`（JSON 列隐式转换） | 可用但不可移植、无索引 | ⏳ 待办：P2 由向量检索替代，已在路由注释标注演进路径 |
 | API 限流未实现 | 安全门禁缺口 | ⏳ 归入 P5 安全回归（引入 slowapi 等） |
 | 根目录 `main.py` 遗留 | 计划要求删除 | ✅ 已删除，入口统一 `app.main:app` |

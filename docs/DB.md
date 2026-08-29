@@ -168,9 +168,9 @@ erDiagram
 3. 生产 / 测试库禁止手写 DDL；`ai_cooker_test` 由 `tests/conftest.py` 自动迁移，新环境需先用 root 预建库并授权（见 [README.md](../README.md) 方式 B）。
 4. 所有查询走参数化（SQLAlchemy 表达式 / `text` 绑定参数），防止 SQL 注入。
 
-## 7. P1 计划约定（待实施，仅文档先行）
+## 7. P1 约定（已实施，2026-08-29）
 
-以下约定在 P1 实施后生效，**当前数据库结构未变**：
+以下约定已在 P1 实施并生效（数据库结构本身未新增表）：
 
 - `recipes.steps` JSON 结构约定为 `[{"instruction": str, "minutes": int|null}]`。
 - 采集 JSON 中间产物（schema_version=1）区分 `ingredients`（食材）与 `seasonings`（调料）；两者入库统一经 `recipe_ingredients` 关联，调料写入 `ingredients` 表时 `category='调料'`。

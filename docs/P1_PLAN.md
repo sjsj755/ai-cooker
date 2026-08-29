@@ -37,7 +37,7 @@ P0 已交付：FastAPI 骨架、6 张 MySQL 表（Alembic 迁移幂等）、`Rec
 
 ### 3.2 阶段二：入库（ingest）
 
-扫描 `data/crawled/{site}/*.json` → `CrawledRecipe.model_validate()` 严格校验 → `save()` 幂等入库 MySQL → 正文分块（RecursiveCharacterTextSplitter）→ `embed_texts` → Chroma 按 `source_url` 幂等 upsert。
+扫描 `data/crawled/{site}/*.json` → `CrawledRecipe.model_validate()` 严格校验 → `save()` 幂等入库 MySQL → 结构语义分块（`text_builder.py`：标题/用料/步骤不混块、贪心合并至 500 字、无 overlap）→ `embed_texts` → 先删旧块再 Chroma upsert（防孤儿块）。
 
 ### 3.3 JSON 文件格式（schema_version = 1）
 
@@ -83,6 +83,7 @@ P0 已交付：FastAPI 骨架、6 张 MySQL 表（Alembic 迁移幂等）、`Rec
 
 - `app/core/crawler.py`（M）：`CrawledRecipe` 新增 `seasonings: list[CrawledIngredient] = []`（默认空表，向后兼容）；`save()` 对 seasonings 与 ingredients 统一建 `recipe_ingredients` 关联，调料写 `ingredients` 表时 `category='调料'`。
 - `EmbeddingProvider.embed_texts` 接口不变，新增实现 `OpenAICompatibleEmbeddings`。
+- `LLMProvider.structured(prompt, schema)` 新增实现 `OpenAICompatibleLLM`（httpx 直调 `/chat/completions`、JSON 提取 + pydantic 强校验；配置 `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY`，P3 消费）。
 
 ### 4.2 新增文件
 
@@ -93,6 +94,7 @@ app/ingestion/pipeline.py            # 两阶段编排：parse 落盘 / ingest �
 app/crawlers/xiachufang.py           # 下厨房适配器（首个 Crawler）
 app/core/seasoning_words.py          # 调料词表 + 判定函数
 app/core/openai_embeddings.py        # OpenAICompatibleEmbeddings
+app/core/openai_llm.py               # OpenAICompatibleLLM（P3 消费）
 app/vector_store.py                  # ChromaStore（collection recipe_docs）
 app/core/logging.py                  # 结构化日志
 scripts/crawl_recipes.py             # CLI：--site / --stage parse|ingest / --limit / --dry-run / --force
@@ -104,17 +106,19 @@ tests/fixtures/xiachufang_recipe.html# 菜谱详情页样例
 ### 4.3 配置新增（`app/config.py` / `.env.example`）
 
 ```text
+# 向量化 / LLM（模型与服务商切换；密钥仅环境变量）
 CHROMA_DIR=./data/chroma
+CHROMA_COLLECTION=recipe_docs
 EMBEDDING_BASE_URL=https://api.openai.com/v1
 EMBEDDING_MODEL=text-embedding-3-small
 EMBEDDING_API_KEY=
 EMBEDDING_BATCH_SIZE=64
-CRAWLER_DELAY_SECONDS=1.0
-CRAWLER_TIMEOUT_SECONDS=10.0
-CRAWLER_RETRY=3
-CRAWL_ALLOWED_DOMAINS=["www.xiachufang.com"]
-LOG_LEVEL=INFO
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL=gpt-4o-mini
+LLM_API_KEY=
 ```
+
+> 采集 / 日志参数（delay=10.0 对齐 robots、timeout、retry、UA、域名白名单 www+m、`LOG_LEVEL`）默认在 `app/config.py`；`.env` 实际仅保留 `DATABASE_URL` 与嵌入/LLM 的 base_url/model/key，其余取代码默认值，完整模板见 `.env.example`。
 
 `.gitignore` 追加 `data/`（Chroma 持久化目录、JSON 中间产物与断点状态不入库）。
 
@@ -123,8 +127,8 @@ LOG_LEVEL=INFO
 - `httpx`：从 dev 组移入主依赖（采集是运行时能力）。
 - `beautifulsoup4`：HTML 解析。
 - `chromadb`：向量库客户端（`PersistentClient` 本地目录持久化）。
-- `langchain-text-splitters`：`RecursiveCharacterTextSplitter` 分块。
-- 嵌入复用已装的 `langchain-openai`（`OpenAIEmbeddings`，`base_url` 可切换）。
+- ~~`langchain-text-splitters`~~：计划用 `RecursiveCharacterTextSplitter`，实施中弃用，改为自研 `app/ingestion/text_builder.py` 结构单元分块（无该依赖）。
+- 嵌入 / LLM 均为自研 OpenAI 兼容 httpx 实现（`openai_embeddings.py` / `openai_llm.py`），不依赖 langchain 封装。
 
 Python 3.14 wheel 风险同 P0：任一新增包在 3.14 下无 wheel 时锁定兼容版本；`uv.lock` 为准。
 
@@ -226,12 +230,13 @@ uv run uvicorn app.main:app
 
 | 项目 | 结果 |
 |---|---|
-| 依赖安装 | 完成：httpx、beautifulsoup4、chromadb>=1.5、langchain-text-splitters 入主依赖；Python 3.14 wheel 已验证，`uv sync`、`uv lock --check` 通过 |
+| 依赖安装 | 完成：httpx、beautifulsoup4、chromadb>=1.5 入主依赖（`langchain-text-splitters` 实施中弃用，分块为自研 `text_builder`）；Python 3.14 wheel 已验证（chromadb 1.5.9 / onnxruntime / tokenizers），`uv sync`、`uv lock --check` 通过 |
 | JSON round-trip 与分流 | 完成：schema_version=1 + seasonings 往返测试通过；调料词表 33 组 + 别名归并（生抽/老抽→酱油 等）与去重 |
 | fixture 解析 | 完成：4 个真实 fixture，PC/移动详情 + explore/移动分类索引解析测试通过 |
 | 入库 / 去重 / 断点续采 | 完成：parse 文件判重、resume/force、state.json 断点、failed.jsonl；ingest MySQL `source_url` 唯一键幂等、`--force` 同事务删除重建、无效 JSON 移 `invalid/` + reasons.jsonl，均有测试 |
 | Chroma 幂等 | 完成：本地 `data/chroma` PersistentClient（cosine），`sha256(source_url)` 确定性 ID + chunk 子 ID；分块为结构单元（标题/用料/步骤不混块、无 overlap、超长步骤句号回退）；写入前按 `source_url` 清理旧块再 upsert（防孤儿块、重跑集合大小不变、维度冲突明确报错）；真实嵌入验收需 `EMBEDDING_API_KEY` |
-| 测试 | 68 个全绿（P0 19 + P1 新增 49），全部离线可跑（嵌入单测用 MockTransport、管线用注入 FakeEmbeddings） |
+| LLM 兼容层 | 完成：`OpenAICompatibleLLM`（P3 消费）——httpx 直调 `/chat/completions`、JSON 提取 + pydantic 强校验、重试兜底；`LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` 可切 DeepSeek / Qwen / OpenAI / Ollama（key 留空不带鉴权头）；7 个 MockTransport 单测 |
+| 测试 | 81 个全绿（P0 19 + P1 新增 55 + LLM 兼容 7），全部离线可跑（嵌入/LLM 单测用 MockTransport、管线用注入 FakeEmbeddings） |
 | 性能基线 | fixture 纯解析满足 ≥10 页/s（无网络）；真实抓取受站点限流影响，观测记录见 P1_COLLECTION_DESIGN.md §15 |
 | 安全核验 | 完成：robots.txt 检查、域名白名单（www/m）、UA 标识、HTML 清洗、密钥仅环境变量；真实抓取反爬/限流处置见 §15；Chroma 关闭匿名遥测、单写者约定已文档化 |
 

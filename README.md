@@ -40,6 +40,7 @@ uv run python scripts/crawl_recipes.py --site xiachufang --stage parse --limit 5
 uv run python scripts/crawl_recipes.py --site xiachufang --stage parse --dry-run
 uv run python scripts/crawl_recipes.py --site xiachufang --stage ingest
 # 真实嵌入需先配置 EMBEDDING_API_KEY（EMBEDDING_BASE_URL / EMBEDDING_MODEL 可切换）
+# P3 LLM 兼容：LLM_BASE_URL / LLM_MODEL / LLM_API_KEY（如 DeepSeek / Qwen / Ollama；密钥留空则不带鉴权头）
 ```
 
 当前文档记录的 P0 交付物：
@@ -47,7 +48,7 @@ uv run python scripts/crawl_recipes.py --site xiachufang --stage ingest
 - FastAPI 应用工厂 + `/health`（含 DB 连通检查）
 - `docker-compose.yml`（MySQL 8.4）+ `.env.example` + `.gitignore`
 - 6 张表 SQLAlchemy 模型与 Alembic 初始迁移（可重复执行）
-- 接口抽象层：`LLMProvider` / `EmbeddingProvider` / `Retriever` / `ScoringStrategy` / `RecipeCrawler`
+- 接口抽象层：`LLMProvider` / `EmbeddingProvider` / `Retriever` / `ScoringStrategy` / `RecipeCrawler`（P1 已提供 OpenAI 兼容实现 `OpenAICompatibleEmbeddings` / `OpenAICompatibleLLM`）
 - 兜底框架：`retry_with_backoff`（指数退避 + jitter）、`DegradedResult`、`FallbackError`、`degrade()`
 - LangGraph 空图：`parse → link → filter → retrieve → rank → generate`，可编译、空状态跑通
 - API：`GET /api/ingredients/search`、`GET /api/recipes/{id}`、`GET /api/tags` 返回真实数据；`POST /api/recipes/recommend` 返回 501 占位（P3 实现）
