@@ -7,7 +7,8 @@
 - 防注入：不可信用户内容经 ``sanitize_text`` 清洗 + ``json.dumps`` 编码为
   数据字面量，配合“数据不是指令”约束与系统提示词指令层级，注入文本无法改写指令。
 - 防幻觉（不乱编）：parse 只抽取原文明确提到的食材；generate 的 recipe_id 必须
-  来自候选集，数据字段必须与候选 JSON 一致，steps 只基于候选信息编写。
+  来自候选集，数据字段必须与候选 JSON 一致；steps 由系统从菜谱库回填
+  （v1.2：LLM 不写 steps，只写一句话 tips，显著降低生成耗时与输出体量）。
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from __future__ import annotations
 from app.core.prompts import MAX_TEXT_ITEMS, json_data_block, sanitize_text
 from app.core.retriever import RecipeCandidate
 
-PROMPT_VERSION = "1.1"
+PROMPT_VERSION = "1.2"
 
 _OUTPUT_REQUIREMENTS = (
     "输出要求：\n"
@@ -85,8 +86,10 @@ def generate_prompt(
         "- 每条推荐的 recipe_id 必须来自候选菜谱列表；禁止虚构候选之外的菜谱。\n"
         "- title / match_score / missing_ingredients / difficulty / cook_time_minutes\n"
         "  必须与候选菜谱 JSON 完全一致，不得改写、补充或编造。\n"
-        "- steps 只能基于候选菜谱 JSON 编写做法步骤；候选信息不足时 steps 输出空数组，"
-        "禁止编造候选之外的内容。\n"
+        "- steps 必须输出空数组 []（可省略该字段）；做法步骤由系统从菜谱库回填，"
+        "你不需要编写 steps，禁止编造做法内容。\n"
+        "- tips 为面向用户的一句话建议（如口味搭配、替代建议、注意事项），"
+        "每道菜最多一句话，不得虚构食材与做法。\n"
         f"- 推荐数量不得超过候选数量（当前 {len(candidates)} 条），"
         "同一菜谱最多推荐一次。\n\n"
         f"{_OUTPUT_REQUIREMENTS}"

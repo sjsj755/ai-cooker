@@ -370,6 +370,35 @@ BACKUP_STOP_APP_ALLOWED=true ./scripts/backup.sh --stop-app
 > 配置新增：`RECOMMEND_CACHE_TTL_SECONDS` / `RECOMMEND_CACHE_MAX_ENTRIES` /
 > `WARMUP_ON_STARTUP`（`.env.example` 已同步；测试环境由 `tests/conftest.py`
 > 关闭缓存与预热，保证既有用例行为不变）。
+
+### 8.2 P6.2 首次访问提速：generate 只写 tips，steps 回填 MySQL 原文（2026-08-30 追加）
+
+> 背景：P6.1 后重复查询已秒回，但“首次/唯一食材组合”仍约 13-17s，其中
+> generate（LLM 为 5 道菜各写一份完整 steps）占 8-17s，为最大瓶颈。
+
+| 优化 | 实现 | 验证 |
+|---|---|---|
+| generate 输出瘦身 | `generate_prompt` v1.2：约束 LLM `steps 必须输出空数组`、只写一句话 `tips`；步骤由 `_validate_recommendations` 既有回填逻辑从 MySQL 原文补齐（回填失败语义不变 → 503） | 真实 DeepSeek 调用：generate 阶段实测由 ~8-17s 降至 ~3-5s（实测见下方行为说明）；提示词单测同步更新 |
+
+> 行为说明：推荐卡「做法步骤」改为展示菜谱库原文（与降级路径/搜索详情一致），
+> tips 仍为 AI 一句话建议；防幻觉（事实字段候选回填）与降级/503 语义不变。
+> 实测（2026-08-30，本机 + 花生壳公网）：首次唯一输入 番茄/鸡蛋 约 8-9s
+> （parse ~3s + 检索 ~2s + generate ~3-4s），重复请求缓存秒回 0.003-0.01s。
+
+### 8.3 P6.3 首访最坏延迟兜底：generate 硬超时 + 重试收敛（2026-08-30 追加）
+
+> 背景：P6.2 后 generate 正常 3-6s，但 DeepSeek 高峰期偶发慢/超时——原
+> `structured()` 固定 3 次尝试 × 30s httpx 超时，实测最坏 97s（用户仍成功
+> 拿到结果，但等待不可接受）。
+
+| 优化 | 实现 | 验证 |
+|---|---|---|
+| generate 硬超时 | `generate_node` 用 `asyncio.wait_for(..., LLM_GENERATE_TIMEOUT_SECONDS=10)` 包裹；超时/失败一律走既有降级路径（MySQL 原文直出，秒回） | 新增单测：慢 LLM（sleep 5s）+ 0.2s 超时 → 降级返回 MySQL steps、`tips=None`、`degraded=true` |
+| LLM 重试收敛 | `OpenAICompatibleLLM` 重试次数由 `LLM_MAX_ATTEMPTS` 配置（默认 3 → 2） | 全量 290 passed + 13 skipped |
+
+> 配置新增：`LLM_MAX_ATTEMPTS` / `LLM_GENERATE_TIMEOUT_SECONDS`（`.env.example`
+> 已同步）。效果：正常时段首访约 8-9s；DeepSeek 拥堵时段 generate 最迟 10s
+> 降级直出原文，总延迟有界（不再出现 90s+），且降级响应内容完整。
 > 全栈实跑回填。
 
 ## 9. 部署须知

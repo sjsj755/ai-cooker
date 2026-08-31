@@ -64,7 +64,8 @@ uv run python scripts/crawl_recipes.py --site xiachufang --stage ingest
 - 提示词规范化（v1.1）：`app/core/prompts.py` 固定系统提示词（指令层级 + JSON-only + 禁虚构）+ `app/graph/prompts.py` 统一四段式模板（任务 → JSON 只读数据块 → 约束 → 输出要求）；不可信用户内容经清洗 + `json.dumps` 数据化嵌入，注入文本无法改写指令；模板为确定性纯函数（同输入同输出）
 - `app/graph/linking.py` + `link_node`：四级映射（精确 → 别名 → 包含 → `ingredients_docs` 向量，相似度阈值 0.85 可配），向量不可用自动降级三级映射（不报错），未命中 `unknown=True`
 - `filter_node`：清洗去重、≤30 项 / 单项 ≤50 字拦截、构造 `state.query`（标准名优先，未映射用 raw_name）与 `state.ingredients`（缺料计算）
-- `generate_node`：LLM 生成 `RecommendationSet`，防幻觉（recipe_id 白名单 + 越界/重复丢弃 + WARN；title/分数/缺料/难度/时长等事实字段一律以候选集为准回填，LLM 只写 steps/tips；输出按候选序去重稳定排序）；LLM steps 缺失回填 MySQL；LLM 失败 / 无 key 降级直出 MySQL 原文（steps/difficulty/cook_time 完整，`tips=None` + notice），MySQL 不可用则 503
+- `generate_node`：LLM 生成 `RecommendationSet`，防幻觉（recipe_id 白名单 + 越界/重复丢弃 + WARN；title/分数/缺料/难度/时长等事实字段一律以候选集为准回填，LLM 只写一句话 tips——v1.2 起 steps 由 MySQL 原文回填，生成输出体量骤降、耗时从 8-17s 降至约 3-5s；输出按候选序去重稳定排序）；LLM 失败 / 无 key 降级直出 MySQL 原文（steps/difficulty/cook_time 完整，`tips=None` + notice），MySQL 不可用则 503
+- P6.3 首访兜底：generate 硬超时 `LLM_GENERATE_TIMEOUT_SECONDS`（默认 10s）——LLM 拥堵/超时即秒级降级直出 MySQL 原文，最坏延迟可预期（不再出现 90s+ 的三次 30s 重试）；LLM 结构化调用重试次数可配 `LLM_MAX_ATTEMPTS`（默认 2）
 - `workflow.py`：条件边（parse 重试唯一决策点、query 为空降级结束、候选为空结束、generate 降级）
 - `POST /api/recipes/recommend`：501 → 200，响应 `recipes: list[Recommendation]`；空食材 400、检索不可用 503
 - 配置：`RECOMMEND_TOP_K=5`、`RECOMMEND_MAX_PARSE_RETRIES=1`、`LINK_VECTOR_SIMILARITY_THRESHOLD=0.85`
@@ -102,6 +103,7 @@ uv run python scripts/crawl_recipes.py --site xiachufang --stage ingest
 - BM25 与向量双路检索并行（`hybrid._retrieve` 拆分 `_bm25_path` / `_vector_path` 后并发执行）：热态检索耗时约减半，冷启动时语料构建与 Chroma 加载同时进行；降级 / 503 语义与原串行版完全一致
 - 配置：`RECOMMEND_CACHE_TTL_SECONDS` / `RECOMMEND_CACHE_MAX_ENTRIES` / `WARMUP_ON_STARTUP`（`.env.example` 已同步；测试环境默认关闭缓存与预热，保证用例隔离）
 - 验证（2026-08-29，本机 + 花生壳公网）：番茄/鸡蛋 首次 17.5s → 二次 0.008s；土豆/鸡蛋 首次 13.2s → 二次 0.003s；公网 https://12926kduk6079.vicp.fun/ 重复推荐 0.26s；全量 284 passed + 13 skipped
+- P6.2/P6.3 追加（2026-08-30）：generate 改只写一句话 tips、steps 由 MySQL 原文回填（5 候选实测 6.25s，原 8-17s），并加 10s 硬超时兜底（超时降级直出原文，不再随 DeepSeek 拥堵无限等待）；全量 290 passed + 13 skipped
 
 当前文档记录的 P0 交付物：
 

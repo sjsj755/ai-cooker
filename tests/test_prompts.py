@@ -81,7 +81,8 @@ def test_generate_prompt_embeds_candidates_and_constraints():
     assert data["candidates"][0]["title"] == "土豆炒鸡蛋"
     assert "禁止虚构候选之外的菜谱" in prompt
     assert "必须与候选菜谱 JSON 完全一致" in prompt
-    assert "候选信息不足时 steps 输出空数组" in prompt
+    assert "steps 必须输出空数组" in prompt
+    assert "做法步骤由系统从菜谱库回填" in prompt
     assert "同一菜谱最多推荐一次" in prompt
 
 

@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     llm_api_key: str | None = None
     llm_timeout_seconds: float = 30.0
     llm_temperature: float = 0.2
+    # P6.3：LLM 结构化调用重试次数（2 次 = 首败重试 1 次）；高峰期 DeepSeek
+    # 偶发慢/超时，减少重试避免用户等 90s+（generate 另有硬超时，见下）
+    llm_max_attempts: int = 2
+    # P6.3：generate 阶段硬超时（秒）。LLM 文案超时/失败即秒级降级直出
+    # MySQL 原文（steps/difficulty/cook_time 完整，仅 tips=None + notice），
+    # 保证“首次访问”最坏延迟可预期，而不是随 LLM 拥堵无限变慢
+    llm_generate_timeout_seconds: float = 10.0
 
     # P3 推荐工作流
     recommend_top_k: int = 5
@@ -77,6 +84,9 @@ class Settings(BaseSettings):
     # 多 worker 时各进程独立缓存；仅缓存非降级结果，故障不会被“粘住”）
     recommend_cache_ttl_seconds: float = 600.0
     recommend_cache_max_entries: int = 256
+    # P6.3：降级结果短 TTL 缓存（秒；0=不缓存降级）。LLM 拥堵期间重复查询
+    # 也能秒回；TTL 很短，DeepSeek 恢复后最多 30s 内即返回新结果
+    recommend_cache_degraded_ttl_seconds: float = 30.0
 
     # P6.1 性能优化：启动时后台预热检索（BM25 语料 + Chroma 集合），
     # 避免首个用户承担冷启动（实测冷启动可达 30-60s，前端 recommend 超时 30s）

@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from app.config import Settings
 from app.core.retriever import RecipeCandidate
 from app.graph.nodes import generate_node
 from app.graph.state import Recommendation, empty_state
@@ -214,6 +215,31 @@ def test_generate_fills_empty_steps_from_mysql(monkeypatch):
         monkeypatch.setattr("app.graph.nodes.get_llm_provider", lambda: llm)
         result = _run(generate_node(_state(rid)))
         assert result["recommendations"][0].steps == STEPS
+    finally:
+        delete_recipe(URL)
+
+
+def test_generate_timeout_degrades_to_mysql(monkeypatch):
+    """P6.3：generate 硬超时（LLM 拥堵）→ 秒级降级直出 MySQL 原文。"""
+    rid = _seed_recipe()
+    try:
+        class SlowLLM:
+            async def structured(self, prompt, schema):
+                await asyncio.sleep(5)
+                return RecommendationSet(recommendations=[])
+
+        monkeypatch.setattr("app.graph.nodes.get_llm_provider", lambda: SlowLLM())
+        monkeypatch.setattr(
+            "app.graph.nodes.get_settings",
+            lambda: Settings(llm_generate_timeout_seconds=0.2),
+        )
+        result = _run(generate_node(_state(rid)))
+        recs = result["recommendations"]
+        assert len(recs) == 1
+        assert recs[0].recipe_id == rid
+        assert recs[0].steps == STEPS  # MySQL 原文回填
+        assert recs[0].tips is None
+        assert result["degraded"] is True
     finally:
         delete_recipe(URL)
 

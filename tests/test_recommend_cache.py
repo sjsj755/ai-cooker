@@ -72,3 +72,22 @@ def test_recommend_cache_skips_degraded(monkeypatch):
         assert r1.status_code == 200
         assert r2.status_code == 200
         assert len(calls) == 2  # 降级结果不缓存，故障恢复后立即生效
+
+
+def test_recommend_degraded_cache_short_ttl(monkeypatch):
+    """P6.3：降级结果进入短 TTL 缓存，拥堵时重复查询也秒回。"""
+    calls, client = _make_client(monkeypatch, degraded=True)
+    monkeypatch.setattr(rec_mod, "_recommend_cache", TTLCache(ttl_seconds=0))
+    monkeypatch.setattr(rec_mod, "_degraded_cache", TTLCache(ttl_seconds=2))
+    with client:
+        r1 = client.post(
+            "/api/recipes/recommend",
+            json={"ingredients": ["土豆"], "exclude_tags": []},
+        )
+        r2 = client.post(
+            "/api/recipes/recommend",
+            json={"ingredients": ["土豆"], "exclude_tags": []},
+        )
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert len(calls) == 1  # 降级短缓存命中，图只跑了一次

@@ -58,7 +58,7 @@ def get_llm_provider() -> LLMProvider | None:
     if not settings.llm_api_key:
         return None
     try:
-        return OpenAICompatibleLLM(settings)
+        return OpenAICompatibleLLM(settings, max_attempts=settings.llm_max_attempts)
     except LLMConfigError:
         return None
 
@@ -256,16 +256,24 @@ async def generate_node(state: CookState) -> CookState:
         )
         return result_state
     try:
-        result = await provider.structured(
-            generate_prompt(ranked, state.ingredients or [], state.exclude_tags or []),
-            RecommendationSet,
+        # P6.3：generate 硬超时——LLM 拥堵时不再无限重试等待，
+        # 超时/失败一律走降级补全（MySQL 原文直出，秒回）
+        result = await asyncio.wait_for(
+            provider.structured(
+                generate_prompt(
+                    ranked, state.ingredients or [], state.exclude_tags or []
+                ),
+                RecommendationSet,
+            ),
+            timeout=get_settings().llm_generate_timeout_seconds,
         )
-    except Exception as exc:  # noqa: BLE001 - 生成失败走降级补全
+    except Exception as exc:  # noqa: BLE001 - 生成失败/超时走降级补全
         log_event(
             logger,
             logging.WARNING,
             "graph.generate.failed",
             error=f"{type(exc).__name__}: {exc}",
+            timeout=get_settings().llm_generate_timeout_seconds,
             degraded=True,
         )
         result_state = await _degrade_recommendations(state, ranked)

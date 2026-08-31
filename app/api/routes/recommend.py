@@ -22,6 +22,10 @@ _recommend_cache = TTLCache(
     ttl_seconds=max(float(_settings.recommend_cache_ttl_seconds), 0.0),
     max_entries=int(_settings.recommend_cache_max_entries),
 )
+_degraded_cache = TTLCache(
+    ttl_seconds=max(float(_settings.recommend_cache_degraded_ttl_seconds), 0.0),
+    max_entries=int(_settings.recommend_cache_max_entries),
+)
 
 
 def _cache_key(payload: RecommendRequest) -> tuple:
@@ -56,8 +60,8 @@ async def recommend(
     if not any(clean_text(item) for item in payload.ingredients):
         raise HTTPException(status_code=400, detail="食材列表不能为空")
     key = _cache_key(payload)
-    if _recommend_cache.enabled:
-        cached = _recommend_cache.get(key)
+    if _recommend_cache.enabled or _degraded_cache.enabled:
+        cached = _recommend_cache.get(key) or _degraded_cache.get(key)
         if cached is not None:
             return cached.model_copy(deep=True)
     try:
@@ -92,7 +96,10 @@ async def recommend(
         degraded=bool(result.get("degraded", False)),
         notice=result.get("notice"),
     )
-    # 仅缓存非降级结果：LLM/检索故障导致的降级不“粘住”，恢复后立即返回新结果
-    if _recommend_cache.enabled and not response.degraded:
+    # 非降级结果进长 TTL 缓存；降级结果进短 TTL 缓存（LLM 拥堵时重复查询也秒回，
+    # 且恢复后最多 TTL 内即返回新结果，不长期“粘住”）
+    if not response.degraded and _recommend_cache.enabled:
         _recommend_cache.set(key, response)
+    elif response.degraded and _degraded_cache.enabled:
+        _degraded_cache.set(key, response)
     return response
