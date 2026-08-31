@@ -10,7 +10,7 @@
 
 Python 3.14 + uv · FastAPI · SQLAlchemy 2.x + Alembic · LangGraph · MySQL 8.x（InnoDB + utf8mb4）· pytest
 
-## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）→ P2 检索层（已完成）→ P3 LangGraph 工作流（已完成，2026-08-29 验收通过）→ P4 前端（已完成，2026-08-29 验收通过：191 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_PLAN.md](docs/P4_PLAN.md)）→ P4.1 前端视觉与交互优化（已完成，2026-08-29 验收通过：194 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md)）→ P4.2 推荐页详情抽屉 + 食材/调料区分 + 感知性能优化（已完成，2026-08-29 验收通过：200 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_2_PLAN.md](docs/P4_2_PLAN.md)）→ P5 全量验收 + 用户反馈闭环（已完成，2026-08-29 验收通过：240 测试全绿 + 6 条 Playwright 冒烟 + k6 10k 门禁通过 + 50k 基线留痕；实施计划与验收结果见 [docs/P5_PLAN.md](docs/P5_PLAN.md)）→ P6 部署上线（代码实施完成 + 本机裸机验证，2026-08-29：269 测试全绿；Docker Compose 全栈 + Caddy 自动 HTTPS + 可信代理 IP + 安全加固 + 备份运维 + GitHub Actions 门禁；实施计划与验收结果见 [docs/P6_PLAN.md](docs/P6_PLAN.md)，Docker 全栈服务器实跑与 CI 实跑待回填）→ P6.1 推荐性能优化（已完成，2026-08-29 验收通过：284 测试全绿 + 13 skipped；推荐结果 TTL 缓存秒回 + 启动后台预热 + BM25/向量双路并行，实测见 README「P6.1」小节）
+## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）→ P2 检索层（已完成）→ P3 LangGraph 工作流（已完成，2026-08-29 验收通过）→ P4 前端（已完成，2026-08-29 验收通过：191 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_PLAN.md](docs/P4_PLAN.md)）→ P4.1 前端视觉与交互优化（已完成，2026-08-29 验收通过：194 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md)）→ P4.2 推荐页详情抽屉 + 食材/调料区分 + 感知性能优化（已完成，2026-08-29 验收通过：200 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_2_PLAN.md](docs/P4_2_PLAN.md)）→ P5 全量验收 + 用户反馈闭环（已完成，2026-08-29 验收通过：240 测试全绿 + 6 条 Playwright 冒烟 + k6 10k 门禁通过 + 50k 基线留痕；实施计划与验收结果见 [docs/P5_PLAN.md](docs/P5_PLAN.md)）→ P6 部署上线（代码实施完成 + 本机裸机验证，2026-08-29：269 测试全绿；Docker Compose 全栈 + Caddy 自动 HTTPS + 可信代理 IP + 安全加固 + 备份运维 + GitHub Actions 门禁；实施计划与验收结果见 [docs/P6_PLAN.md](docs/P6_PLAN.md)，Docker 全栈服务器实跑与 CI 实跑待回填）→ P6.1 推荐性能优化（已完成，2026-08-29 验收通过：284 测试全绿 + 13 skipped；推荐结果 TTL 缓存秒回 + 启动后台预热 + BM25/向量双路并行，实测见 README「P6.1」小节） → P6.2/P6.3 首访提速与兜底（已完成，2026-08-30：290 测试全绿 + 13 skipped） → P6.4 首次搜索提速（已完成，2026-08-31：313 测试全绿 + 13 skipped；快路径秒出原文 + 后台 AI 补全 + 冷启动收敛，实测见 README「P6.4」小节）
 
 P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档见 [docs/P1_COLLECTION_DESIGN.md](docs/P1_COLLECTION_DESIGN.md)；P2 检索层实施计划见 [docs/P2_PLAN.md](docs/P2_PLAN.md)；P3 LangGraph 工作流实施计划见 [docs/P3_PLAN.md](docs/P3_PLAN.md)；P4 前端实施计划见 [docs/P4_PLAN.md](docs/P4_PLAN.md)；P4.1 前端视觉与交互优化实施计划见 [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md)；P5 全量验收与用户反馈闭环实施计划见 [docs/P5_PLAN.md](docs/P5_PLAN.md)；P6 部署上线实施计划见 [docs/P6_PLAN.md](docs/P6_PLAN.md)。
 
@@ -104,6 +104,16 @@ uv run python scripts/crawl_recipes.py --site xiachufang --stage ingest
 - 配置：`RECOMMEND_CACHE_TTL_SECONDS` / `RECOMMEND_CACHE_MAX_ENTRIES` / `WARMUP_ON_STARTUP`（`.env.example` 已同步；测试环境默认关闭缓存与预热，保证用例隔离）
 - 验证（2026-08-29，本机 + 花生壳公网）：番茄/鸡蛋 首次 17.5s → 二次 0.008s；土豆/鸡蛋 首次 13.2s → 二次 0.003s；公网 https://12926kduk6079.vicp.fun/ 重复推荐 0.26s；全量 284 passed + 13 skipped
 - P6.2/P6.3 追加（2026-08-30）：generate 改只写一句话 tips、steps 由 MySQL 原文回填（5 候选实测 6.25s，原 8-17s），并加 10s 硬超时兜底（超时降级直出原文，不再随 DeepSeek 拥堵无限等待）；全量 290 passed + 13 skipped
+
+### P6.4（首次搜索提速 · 已完成）
+
+- 快路径 + 后台 AI 补全：缓存未命中时 `POST /api/recipes/recommend` 先以 `fast_first=true` 跑图，秒级（约 2-5s）返回 MySQL 原文（`degraded=true` + `ai_pending=true` + notice「AI 文案生成中，稍后自动更新」）；随后按缓存键单飞触发后台任务，复用已算好的 `ranked` 直接补全 AI 文案（一句话 tips），成功后写长缓存（600s），失败不写（降级缓存 30s 后自然重试，不“粘住”）。
+- 前端感知：新增 `POST /api/recipes/recommend/status`（独立限流 30/min，不占 recommend 配额），返回 `{ready, warming, result}`；前端收到快响应后每 3s 轮询、最多 10 次，`ready=true` 自动替换为完整 AI 推荐，`warming=false` 停止并保留快结果（横幅提示可重新推荐）。响应新增 `ai_pending` 字段，快响应渲染中性横幅而非“降级提示”。
+- 识别阶段有界：`LLM_PARSE_TIMEOUT_SECONDS`（默认 8s）硬超时 + parse 结果内存缓存（`PARSE_CACHE_TTL_SECONDS` 默认 24h，命中跳过 LLM，键为清洗后食材列表）。
+- 网络/向量复用：LLM 与 Embedding 改进程级共享 `httpx.AsyncClient`（keep-alive）；embedding 查询缓存（`EMBEDDING_CACHE_TTL_SECONDS` 默认 24h，键含模型名）。
+- 冷启动收敛：BM25 索引磁盘持久化（`BM25_CACHE_ENABLED=true`、`BM25_CACHE_FILE=./data/cache/bm25.pkl`，探针一致直接加载约 1-2s）+ 启动有限等待预热（`WARMUP_WAIT_SECONDS` 默认 10s），重启后首个请求不再撞上索引构建。
+- 配置：`RECOMMEND_FAST_FIRST_ENABLED`（默认开；置 false 恢复“首访即完整全链路”旧语义）/ `RATE_LIMIT_STATUS_PER_MINUTE`（默认 30）等，`.env.example` 已同步；测试环境默认关闭 parse/embedding/BM25 缓存。
+- 验证（2026-08-31，本机单测）：快路径不调 generate LLM 且含 MySQL 原文；status 五态与失败标记生命周期；返回深拷贝隔离；后台补全后二次请求返回 AI 文案；全量 313 passed + 13 skipped
 
 当前文档记录的 P0 交付物：
 

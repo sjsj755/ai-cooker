@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import pickle
 import re
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from rank_bm25 import BM25Okapi
@@ -23,6 +26,9 @@ _CJK_RUN = re.compile(r"[\u4e00-\u9fff]+")
 _ASCII_RUN = re.compile(r"[A-Za-z0-9]+")
 
 Loader = Callable[[], tuple[list[dict[str, Any]], tuple]]
+
+# P6.4：磁盘缓存载荷版本（索引结构/分词变化时递增，旧缓存自动作废）
+BM25_CACHE_VERSION = 1
 
 
 def tokenize(text: str) -> list[str]:
@@ -143,6 +149,7 @@ class BM25Corpus:
         loader: Loader | None = None,
         probe_loader: Callable[[], tuple] | None = None,
         probe_ttl_seconds: float = 1.0,
+        cache_file: str | None = None,
     ) -> None:
         self._settings = settings or get_settings()
         self._session_factory = session_factory
@@ -155,6 +162,14 @@ class BM25Corpus:
         # 探针 TTL：语料内容变化最多延迟 N 秒被感知（仅默认 loader 路径，
         # 自定义 loader 走全量重载语义；压测下避免每请求 COUNT/MAX 查询）
         self._probe_ttl_seconds = probe_ttl_seconds
+        # P6.4：磁盘缓存仅用于默认 loader（自定义 loader 走全量重载语义）；
+        # 显式传入 cache_file 时始终启用（供测试用 tmp 路径）
+        self._cache_file = cache_file or (
+            self._settings.bm25_cache_file
+            if self._settings.bm25_cache_enabled and loader is None
+            else ""
+        )
+        self._use_cache = bool(self._cache_file)
         self._last_probe_at = 0.0
         self._lock = asyncio.Lock()
         self._built = False
@@ -174,6 +189,31 @@ class BM25Corpus:
 
     async def ensure_built(self) -> None:
         """按探针校验并重建；失败态按四态表处理（见 P2 计划）。"""
+        # P6.4 磁盘缓存快路径：未构建时先尝试加载落盘索引，
+        # 轻量探针一致则直接复用（重启后约 1-2s，不再全量重建）
+        if not self._built and self._use_cache:
+            loaded = await asyncio.to_thread(self._load_cache)
+            if loaded is not None:
+                index, doc_ids, meta, probe = loaded
+                try:
+                    current_probe = await asyncio.to_thread(self._probe_loader)
+                except Exception as exc:  # noqa: BLE001 - 探针失败不采用磁盘缓存
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "retrieval.corpus.cache_probe_failed",
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                else:
+                    if current_probe == probe:
+                        self._index = index
+                        self._doc_ids = doc_ids
+                        self._meta = meta
+                        self._probe = probe
+                        self._built = True
+                        self._degraded_notice = None
+                        self._last_probe_at = time.monotonic()
+                        return
         # 快路径：语料已构建且未降级时先跑轻量探针，内容未变直接复用缓存索引，
         # 避免每请求全量重载 MySQL 语料行（P5 10k/50k 压测门禁的依赖前提）。
         if self._built and self._degraded_notice is None and self._probe_loader is not None:
@@ -247,6 +287,62 @@ class BM25Corpus:
             self._probe = probe
             self._built = True
             self._degraded_notice = None
+            if self._use_cache:
+                try:
+                    await asyncio.to_thread(
+                        self._save_cache, doc_ids, meta, probe, index
+                    )
+                except Exception as exc:  # noqa: BLE001 - 落盘失败仅告警
+                    log_event(
+                        self._logger,
+                        logging.WARNING,
+                        "retrieval.corpus.cache_write_failed",
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+
+    def _load_cache(self):
+        """读取落盘索引；缺失/损坏/版本不符一律返回 None（走全量重建）。"""
+        path = Path(self._cache_file)
+        if not path.exists():
+            return None
+        try:
+            with open(path, "rb") as fh:
+                payload = pickle.load(fh)
+            if (
+                not isinstance(payload, dict)
+                or payload.get("version") != BM25_CACHE_VERSION
+            ):
+                return None
+            return (
+                payload["index"],
+                payload["doc_ids"],
+                payload["meta"],
+                payload["probe"],
+            )
+        except Exception:  # noqa: BLE001 - 缓存损坏按缺失处理
+            return None
+
+    def _save_cache(
+        self,
+        doc_ids: list[int],
+        meta: dict[int, dict[str, Any]],
+        probe: tuple,
+        index: BM25Okapi | None,
+    ) -> None:
+        """原子落盘（tmp + os.replace），避免半写文件被下次启动读到。"""
+        path = Path(self._cache_file)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": BM25_CACHE_VERSION,
+            "index": index,
+            "doc_ids": doc_ids,
+            "meta": meta,
+            "probe": probe,
+        }
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with open(tmp, "wb") as fh:
+            pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp, path)
 
     def search_sync(self, query: str, top_k: int) -> list[tuple[int, float]]:
         """BM25 搜索；注意 rank_bm25 在极少数文档（1-2 条）时命中 token 的 idf 可能为负，

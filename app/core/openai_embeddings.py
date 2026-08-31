@@ -4,9 +4,19 @@ from __future__ import annotations
 
 import httpx
 
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.core.embeddings import EmbeddingProvider
 from app.core.fallback import FallbackError, retry_with_backoff
+from app.core.net_clients import get_embedding_http_client
+from app.core.ttl_cache import TTLCache
+
+# P6.4：查询向量内存缓存（键含模型名，避免换模型命中旧向量）；
+# 测试环境默认 TTL=0 关闭（tests/conftest.py）
+_embed_settings = get_settings()
+_embedding_cache = TTLCache(
+    ttl_seconds=max(float(_embed_settings.embedding_cache_ttl_seconds), 0.0),
+    max_entries=int(_embed_settings.embedding_cache_max_entries),
+)
 
 
 class EmbeddingConfigError(RuntimeError):
@@ -33,18 +43,42 @@ class OpenAICompatibleEmbeddings(EmbeddingProvider):
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
         if not texts:
             return []
-        results: list[list[float]] = []
-        batch_size = max(1, self.settings.embedding_batch_size)
-        for start in range(0, len(texts), batch_size):
-            results.extend(await self._embed_batch(texts[start : start + batch_size]))
-        return results
+        # 命中缓存直接复用，未命中批量补调（保持 batch_size 分批语义）
+        vectors: list[list[float] | None] = [None] * len(texts)
+        missing: list[int] = []
+        for i, text in enumerate(texts):
+            key = (self.settings.embedding_model, text)
+            if _embedding_cache.enabled:
+                cached = _embedding_cache.get(key)
+                if cached is not None:
+                    vectors[i] = cached
+                    continue
+            missing.append(i)
+        if missing:
+            batch = [texts[i] for i in missing]
+            fetched: list[list[float]] = []
+            batch_size = max(1, self.settings.embedding_batch_size)
+            for start in range(0, len(batch), batch_size):
+                fetched.extend(
+                    await self._embed_batch(batch[start : start + batch_size])
+                )
+            if len(fetched) != len(missing):
+                raise ValueError(
+                    f"嵌入返回数量不符: {len(fetched)} != {len(missing)}"
+                )
+            for idx, vector in zip(missing, fetched):
+                vectors[idx] = vector
+                if _embedding_cache.enabled:
+                    _embedding_cache.set(
+                        (self.settings.embedding_model, texts[idx]), vector
+                    )
+        return [v for v in vectors if v is not None]
 
     async def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         if self._client is None:
-            async with httpx.AsyncClient(
-                timeout=self.settings.embedding_timeout_seconds
-            ) as client:
-                return await self._post_with_retry(client, texts)
+            # P6.4：复用进程级共享客户端（keep-alive），避免每次调用重复握手
+            client = get_embedding_http_client(self.settings)
+            return await self._post_with_retry(client, texts)
         return await self._post_with_retry(self._client, texts)
 
     async def _post_with_retry(

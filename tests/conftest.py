@@ -12,6 +12,11 @@ os.environ.setdefault("CHROMA_DIR", "./data/chroma-test")
 os.environ.setdefault("RECOMMEND_CACHE_TTL_SECONDS", "0")
 os.environ.setdefault("RECOMMEND_CACHE_DEGRADED_TTL_SECONDS", "0")
 os.environ.setdefault("WARMUP_ON_STARTUP", "false")
+# P6.4 新增缓存/持久化在测试中默认关闭，保证既有用例行为不变：
+# parse 结果缓存、embedding 查询缓存、BM25 落盘索引（专项用例显式开启）
+os.environ.setdefault("PARSE_CACHE_TTL_SECONDS", "0")
+os.environ.setdefault("EMBEDDING_CACHE_TTL_SECONDS", "0")
+os.environ.setdefault("BM25_CACHE_ENABLED", "false")
 
 import pytest  # noqa: E402
 from alembic import command  # noqa: E402

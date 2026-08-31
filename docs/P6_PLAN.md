@@ -401,6 +401,32 @@ BACKUP_STOP_APP_ALLOWED=true ./scripts/backup.sh --stop-app
 > 降级直出原文，总延迟有界（不再出现 90s+），且降级响应内容完整。
 > 全栈实跑回填。
 
+### 8.4 P6.4 首次搜索提速：快路径秒出 + 后台 AI 补全 + 冷启动收敛（2026-08-31 追加）
+
+> 背景：P6.1-P6.3 后重复查询已秒回、首访最坏延迟有界，但“新食材组合”的首次
+> 请求仍需等待 parse（LLM 识别）→ 检索 → generate（LLM 文案）全链路，实测
+> 8-9s，DeepSeek 高峰可达 20s+，体验仍偏慢。
+
+| 优化 | 实现 | 验证 |
+|---|---|---|
+| 快路径 + 后台 AI 补全 | `CookState.fast_first`：缓存未命中时 `POST /api/recipes/recommend` 先以 `fast_first=true` 跑图，`generate_node` 直接走 MySQL 原文降级（不调 LLM），秒级返回 `degraded=true + ai_pending=true + notice「AI 文案生成中」`；随后按缓存键单飞触发后台任务复用 `ranked` 只跑 generate，成功后写长缓存（600s），失败记录时间戳不写缓存；`RECOMMEND_FAST_FIRST_ENABLED` 默认开，置 false 恢复旧全链路语义 | 快路径不调 generate LLM 且含 MySQL 原文；后台补全后二次请求返回 AI 文案；同键并发只触发一次后台；失败不污染长缓存 |
+| status 轮询接口 | 新增 `POST /api/recipes/recommend/status`（独立限流 30/min）：五态判定（长缓存就绪 → 在飞 → 近期失败 → 仅降级缓存 → 均无），`ready=true` 携带深拷贝完整结果；失败标记 TTL=降级缓存 TTL（30s）、上限=缓存条数，写入先于在飞移除 | status 五态与优先级；失败标记写入/清除顺序与过期淘汰；返回深拷贝（改嵌套 `steps`/`seasonings` 不影响缓存） |
+| parse 有界 + 缓存 | `LLM_PARSE_TIMEOUT_SECONDS=8`（`asyncio.wait_for` 包裹）；parse 结果内存缓存（`PARSE_CACHE_TTL_SECONDS=86400`、512 条），键为清洗后食材列表，命中跳过 LLM、仅缓存成功结果 | parse 超时走重试门控；缓存命中跳过 provider；失败不缓存 |
+| 网络/向量复用 | LLM 与 Embedding 改进程级共享 `httpx.AsyncClient`（`app/core/net_clients.py`，keep-alive，lifespan 统一关闭）；embedding 查询缓存（`EMBEDDING_CACHE_TTL_SECONDS=86400`，键含模型名） | 同文本只调一次；模型不同不共享；关闭幂等 |
+| 冷启动收敛 | BM25 索引磁盘持久化（`BM25_CACHE_ENABLED=true`、`BM25_CACHE_FILE=./data/cache/bm25.pkl`）：轻量探针一致直接加载（约 1-2s），变更重建并原子落盘，自定义 loader 绕过；lifespan 启动有限等待预热（`WARMUP_WAIT_SECONDS=10`），超时转后台 | BM25 缓存探针一致跳过 loader、变更重建、自定义 loader 绕过 |
+
+> 前端：`frontend/js/recommend.js` 收到快响应后每 3s 轮询 status（最多 10 次/30s），
+> `ready=true` 自动替换完整 AI 推荐，`warming=false` 停止并保留快结果（可手动重试）；
+> 请求中分阶段提示“正在识别食材… → 正在检索菜谱… → 生成 AI 文案…”。
+> 多 worker 语义：内存缓存/在飞集合/失败标记按进程隔离，BM25 落盘文件共享；
+> 跨 worker 全局一致需外置 Redis（范围外后续项）。
+> 配置新增：`RECOMMEND_FAST_FIRST_ENABLED` / `RATE_LIMIT_STATUS_PER_MINUTE` /
+> `LLM_PARSE_TIMEOUT_SECONDS` / `PARSE_CACHE_TTL_SECONDS` / `PARSE_CACHE_MAX_ENTRIES` /
+> `EMBEDDING_CACHE_TTL_SECONDS` / `EMBEDDING_CACHE_MAX_ENTRIES` /
+> `WARMUP_WAIT_SECONDS` / `BM25_CACHE_ENABLED` / `BM25_CACHE_FILE`
+> （`.env.example` 已同步；测试环境默认关闭 parse/embedding/BM25 缓存）。
+> 全量回归：313 passed + 13 skipped（较 P6.2/P6.3 的 290 新增 23 用例）。
+
 ## 9. 部署须知
 
 ### 9.1 首次部署

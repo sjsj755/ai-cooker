@@ -15,6 +15,9 @@
   // recommend 走完整 LangGraph + 真实 LLM，冷启动/波动可达 20s+，
   // 单独放宽超时（其余任务仍用 api.js 默认 5s）。
   const RECOMMEND_TIMEOUT_MS = 30000;
+  // P6.4：快响应后轮询 AI 文案补全状态（3s × 10 次 = 30s 上限）
+  const AI_POLL_INTERVAL_MS = 3000;
+  const AI_POLL_MAX = 10;
   const TAG_KIND_ORDER = ["过敏原", "忌口", "口味"];
 
   // ---- 业务状态（唯一事实来源）----
@@ -25,6 +28,10 @@
   let selectedTagIds = new Set(); // 忌口 / 口味选中 id
   let pending = false; // recommend 任务是否在途
   let debounceTimer = null;
+  let stageTimer = null;
+  let stageHint = "推荐中…";
+  let aiPollTimer = null;
+  let aiPollCount = 0;
   let expandedCardId = null; // 当前展开做法的菜谱 id（一次只展开一张，null 为全部收起）
   let results = []; // 最近一次推荐结果（折叠切换重渲染的数据源）
   let lastRenderedResults = null; // 上次全量渲染的 results 引用（浅比较，数据未变则增量切换）
@@ -108,7 +115,7 @@
     });
     els.recommendBtn.disabled = pending;
     els.recommendBtn.classList.toggle("is-loading", pending);
-    els.recommendBtn.textContent = pending ? "推荐中…" : "推荐菜谱";
+    els.recommendBtn.textContent = pending ? stageHint : "推荐菜谱";
     if (pending) {
       els.recommendBtn.setAttribute("aria-busy", "true");
     } else {
@@ -331,6 +338,112 @@
   }
 
   // ---- 推荐提交 / 重试 ----
+  function stopAiPoll() {
+    if (aiPollTimer !== null) {
+      clearTimeout(aiPollTimer);
+      aiPollTimer = null;
+    }
+    aiPollCount = 0;
+    registry.abort("recommend-status");
+  }
+
+  function startStageHints() {
+    clearTimeout(stageTimer);
+    stageHint = "正在识别食材…";
+    stageTimer = setTimeout(() => {
+      stageHint = "正在检索菜谱…";
+      stageTimer = setTimeout(() => {
+        stageHint = "生成 AI 文案…";
+      }, 5000);
+    }, 3000);
+  }
+
+  function stopStageHints() {
+    clearTimeout(stageTimer);
+    stageTimer = null;
+    stageHint = "推荐中…";
+  }
+
+  function applyRecommendResult(payload) {
+    clearFormError();
+    if (payload.ai_pending) {
+      // 快路径：AI 文案生成中 → 中性横幅 + 后台轮询，不走“降级提示”样式
+      UI.renderBanner(els.banner, {
+        degraded: false,
+        notice: payload.notice || "AI 文案生成中，稍后自动更新",
+      });
+    } else {
+      UI.renderBanner(els.banner, {
+        degraded: !!payload.degraded,
+        notice: payload.notice,
+      });
+    }
+    results = payload.recipes || [];
+    renderCards();
+    if (results.length === 0) {
+      UI.renderEmpty(
+        els.empty,
+        payload.notice || "未找到匹配菜谱，试试补充食材或放宽忌口"
+      );
+    }
+  }
+
+  function pollAiStatus() {
+    aiPollCount += 1;
+    registry
+      .run(
+        "recommend-status",
+        (signal) =>
+          Api.requestJson("/api/recipes/recommend/status", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              ingredients: chips,
+              exclude_tags: selectedTagNames(),
+            }),
+            signal,
+          }),
+        RECOMMEND_TIMEOUT_MS
+      )
+      .then((status) => {
+        if (status && status.ready && status.result) {
+          stopAiPoll();
+          applyRecommendResult(status.result);
+          return;
+        }
+        if (status && !status.warming) {
+          // 后台补全失败/已过期：停止轮询，保留快结果，可手动重新推荐
+          stopAiPoll();
+          UI.renderBanner(els.banner, {
+            degraded: false,
+            notice: "AI 文案暂不可用，可重新推荐",
+          });
+          return;
+        }
+        if (aiPollCount >= AI_POLL_MAX) {
+          stopAiPoll();
+          return;
+        }
+        aiPollTimer = setTimeout(pollAiStatus, AI_POLL_INTERVAL_MS);
+      })
+      .catch((err) => {
+        if (err.type === "aborted") {
+          return;
+        }
+        // 轮询自身出错不停止，继续等待（仍受 AI_POLL_MAX 上限约束）
+        if (aiPollCount >= AI_POLL_MAX) {
+          stopAiPoll();
+          return;
+        }
+        aiPollTimer = setTimeout(pollAiStatus, AI_POLL_INTERVAL_MS);
+      });
+  }
+
+  function startAiPoll() {
+    stopAiPoll();
+    pollAiStatus();
+  }
+
   function submit() {
     if (pending) {
       return;
@@ -339,7 +452,9 @@
       showFormError("请至少添加一种食材");
       return;
     }
+    stopAiPoll();
     pending = true;
+    startStageHints();
     expandedCardId = null;
     results = [];
     els.cards.textContent = "";
@@ -362,18 +477,9 @@
         RECOMMEND_TIMEOUT_MS
       )
       .then((payload) => {
-        clearFormError();
-        UI.renderBanner(els.banner, {
-          degraded: !!payload.degraded,
-          notice: payload.notice,
-        });
-        results = payload.recipes || [];
-        renderCards();
-        if (results.length === 0) {
-          UI.renderEmpty(
-            els.empty,
-            payload.notice || "未找到匹配菜谱，试试补充食材或放宽忌口"
-          );
+        applyRecommendResult(payload);
+        if (payload.ai_pending) {
+          startAiPoll();
         }
       })
       .catch((err) => {
@@ -388,12 +494,14 @@
       })
       .finally(() => {
         pending = false;
+        stopStageHints();
         renderAll();
       });
   }
 
   function retryRecommend() {
     registry.abort("recommend");
+    stopAiPoll();
     clearFormError();
     submit();
   }
@@ -402,6 +510,8 @@
   function clearAll() {
     registry.abort("recommend");
     registry.abort("autocomplete");
+    stopAiPoll();
+    stopStageHints();
     chips = [];
     inputValue = "";
     suggestions = [];

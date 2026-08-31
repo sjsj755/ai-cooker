@@ -15,6 +15,7 @@ from starlette.datastructures import MutableHeaders
 from app.api.router import api_router
 from app.config import get_settings
 from app.core.logging import get_logger, log_event
+from app.core.net_clients import close_http_clients
 from app.core.rate_limit import build_limiter
 
 logger = get_logger("app.main")
@@ -116,6 +117,22 @@ async def lifespan(application: FastAPI):
     if settings.warmup_on_startup:
         warmup_task = asyncio.create_task(_startup_warmup())
         application.state.warmup_task = warmup_task
+        # P6.4：有限等待预热完成再接受请求（默认 ≤10s；BM25 落盘加载约 1-2s），
+        # 超时转后台继续（shield 保证不被取消），失败仅告警语义不变
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(warmup_task),
+                timeout=max(settings.warmup_wait_seconds, 0.0),
+            )
+        except asyncio.TimeoutError:
+            log_event(
+                logger,
+                logging.INFO,
+                "startup.warmup.background",
+                wait_seconds=settings.warmup_wait_seconds,
+            )
+        except Exception:  # noqa: BLE001 - 预热失败不阻断启动
+            pass
     yield
     if warmup_task is not None:
         try:
@@ -124,6 +141,7 @@ async def lifespan(application: FastAPI):
             warmup_task.cancel()
         except Exception:  # noqa: BLE001 - 关停阶段不因预热异常报错
             pass
+    await close_http_clients()
 
 
 def create_app() -> FastAPI:

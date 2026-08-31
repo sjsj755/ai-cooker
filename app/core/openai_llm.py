@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 from app.config import Settings
 from app.core.fallback import FallbackError, retry_with_backoff
 from app.core.llm import LLMProvider
+from app.core.net_clients import get_llm_http_client
 from app.core.prompts import SYSTEM_PROMPT
 
 T = TypeVar("T", bound=BaseModel)
@@ -96,10 +97,9 @@ class OpenAICompatibleLLM(LLMProvider):
     async def _post_once(self, body: dict[str, Any], schema: type[T]) -> T:
         if self._client is not None:
             return await self._request(self._client, body, schema)
-        async with httpx.AsyncClient(
-            timeout=self.settings.llm_timeout_seconds
-        ) as client:
-            return await self._request(client, body, schema)
+        # P6.4：复用进程级共享客户端（keep-alive），避免每次调用重复握手
+        client = get_llm_http_client(self.settings)
+        return await self._request(client, body, schema)
 
     async def _request(
         self,

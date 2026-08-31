@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     embedding_api_key: str | None = None
     embedding_batch_size: int = 64
     embedding_timeout_seconds: float = 30.0
+    # P6.4：embedding 查询内存缓存（秒；0=关闭）。键含模型名，避免换模型后
+    # 命中旧向量；重复查询/跨用户不再重复网络调用
+    embedding_cache_ttl_seconds: float = 86400.0
+    embedding_cache_max_entries: int = 1024
 
     # P3 LLM（结构化识别/文案生成；OpenAI 兼容，可切 DeepSeek / Qwen / 本地端点）
     llm_base_url: str = "https://api.openai.com/v1"
@@ -57,6 +61,13 @@ class Settings(BaseSettings):
     # MySQL 原文（steps/difficulty/cook_time 完整，仅 tips=None + notice），
     # 保证“首次访问”最坏延迟可预期，而不是随 LLM 拥堵无限变慢
     llm_generate_timeout_seconds: float = 10.0
+    # P6.4：parse（识别）阶段硬超时（秒）。识别超时/失败走既有 retry 门控，
+    # 正常 2-4s，最坏约 19s（2 轮 × 8s + 退避），避免随 LLM 拥堵无限变慢
+    llm_parse_timeout_seconds: float = 8.0
+    # P6.4：parse 结果内存缓存（秒；0=关闭）。键为清洗后食材列表，命中跳过
+    # LLM 识别；仅缓存成功结果，避免重复/跨用户组合重复调用 LLM
+    parse_cache_ttl_seconds: float = 86400.0
+    parse_cache_max_entries: int = 512
 
     # P3 推荐工作流
     recommend_top_k: int = 5
@@ -87,10 +98,22 @@ class Settings(BaseSettings):
     # P6.3：降级结果短 TTL 缓存（秒；0=不缓存降级）。LLM 拥堵期间重复查询
     # 也能秒回；TTL 很短，DeepSeek 恢复后最多 30s 内即返回新结果
     recommend_cache_degraded_ttl_seconds: float = 30.0
+    # P6.4：快路径开关（默认开）。缓存未命中时先秒出 MySQL 原文
+    # （ai_pending=true），AI 文案由后台任务补全；置 false 恢复“首访即完整
+    # 全链路”的旧语义（集成测试用，生产不建议关闭）
+    recommend_fast_first_enabled: bool = True
 
     # P6.1 性能优化：启动时后台预热检索（BM25 语料 + Chroma 集合），
     # 避免首个用户承担冷启动（实测冷启动可达 30-60s，前端 recommend 超时 30s）
     warmup_on_startup: bool = True
+    # P6.4：启动时有限等待预热（秒）。预热完成才接受请求（通常 1-2s，
+    # BM25 落盘加载），超时转后台继续（失败仅告警语义不变），
+    # 消除“重启后首个请求撞上索引构建”的竞态
+    warmup_wait_seconds: float = 10.0
+    # P6.4：BM25 索引磁盘持久化。启动先轻量探针（COUNT/MAX），探针一致直接
+    # 加载落盘索引（约 1-2s），内容变更才重建并原子覆写；自定义 loader 自动绕过
+    bm25_cache_enabled: bool = True
+    bm25_cache_file: str = "./data/cache/bm25.pkl"
 
     # P5 限流（slowapi；默认关闭，本地/测试/压测不打扰，生产开启）
     rate_limit_enabled: bool = False
@@ -99,6 +122,8 @@ class Settings(BaseSettings):
     rate_limit_default_per_minute: int = 100
     rate_limit_recommend_per_minute: int = 10
     rate_limit_feedback_per_minute: int = 20
+    # P6.4：状态轮询独立限流（轮询不应占用 recommend 的 10/min 配额）
+    rate_limit_status_per_minute: int = 30
 
     # P5 mock LLM（LLM_MOCK=true 时 get_llm_provider 返回 MockLLMProvider：
     # 零网络 IO、确定性输出，供 CI / k6 压测使用）

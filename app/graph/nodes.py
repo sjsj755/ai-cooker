@@ -15,11 +15,13 @@ from functools import lru_cache
 from sqlalchemy import select
 
 from app.config import get_settings
+from app.core.html_clean import clean_text
 from app.core.llm import LLMProvider
 from app.core.logging import get_logger, log_event
 from app.core.mock_llm import MockLLMProvider
 from app.core.openai_llm import LLMConfigError, OpenAICompatibleLLM
 from app.core.retriever import RecipeCandidate
+from app.core.ttl_cache import TTLCache
 from app.db.session import SessionLocal
 from app.graph.linking import IngredientLinker, get_ingredient_linker
 from app.graph.prompts import generate_prompt, parse_prompt
@@ -36,6 +38,28 @@ MAX_FILTER_ITEMS = 30
 MAX_ITEM_LENGTH = 50
 PARSE_FAIL_NOTICE = "未能识别食材，请补充描述"
 GENERATE_DEGRADE_NOTICE = "AI 文案不可用，已展示菜谱原文"
+AI_PENDING_NOTICE = "AI 文案生成中，稍后自动更新"
+
+# P6.4：parse 结果内存缓存（键为清洗/去重/排序后的食材列表）。
+# 仅缓存成功结果；TTL=0（测试默认）时完全关闭
+_parse_settings = get_settings()
+_parse_cache = TTLCache(
+    ttl_seconds=max(float(_parse_settings.parse_cache_ttl_seconds), 0.0),
+    max_entries=int(_parse_settings.parse_cache_max_entries),
+)
+
+
+def _parse_cache_key(raw_items: list[str]) -> tuple[str, ...]:
+    """归一化缓存键：清洗 + 去重 + 排序，与食材顺序无关。"""
+    return tuple(
+        sorted(
+            {
+                clean_text(item)
+                for item in raw_items
+                if clean_text(item)
+            }
+        )
+    )
 
 
 def degrade_end_node(state: CookState) -> CookState:
@@ -82,9 +106,38 @@ async def parse_node(state: CookState) -> CookState:
             "parse_error": True,
             "retry_count": _retry_cap(),  # 不可恢复：直接超限走降级
         }
+    cache_key = _parse_cache_key(raw_items)
+    if _parse_cache.enabled:
+        cached = _parse_cache.get(cache_key)
+        if cached is not None:
+            parsed = [
+                ParsedIngredient(
+                    raw_name=item.name,
+                    quantity=item.quantity,
+                    unit=item.unit,
+                )
+                for item in cached.model_copy(deep=True).items
+            ]
+            log_event(
+                logger,
+                logging.INFO,
+                "graph.parse.cache_hit",
+                items=len(parsed),
+            )
+            return {
+                **state.model_dump(),
+                "parsed_ingredients": parsed,
+                "parse_error": False,
+                "retry_count": retry_count,
+            }
     try:
-        result = await provider.structured(
-            parse_prompt(raw_items), IngredientExtractionList
+        # P6.4：parse 硬超时——LLM 拥堵时识别阶段不再无限等待，
+        # 超时/失败按既有 retry 门控（最多 2 轮，每轮 ≤8s）
+        result = await asyncio.wait_for(
+            provider.structured(
+                parse_prompt(raw_items), IngredientExtractionList
+            ),
+            timeout=get_settings().llm_parse_timeout_seconds,
         )
     except Exception as exc:  # noqa: BLE001 - 解析失败统一走重试门控
         log_event(
@@ -108,6 +161,8 @@ async def parse_node(state: CookState) -> CookState:
         )
         for item in result.items
     ]
+    if _parse_cache.enabled and parsed:
+        _parse_cache.set(cache_key, result)
     log_event(
         logger,
         logging.INFO,
@@ -243,6 +298,21 @@ async def generate_node(state: CookState) -> CookState:
             "recommendations": [],
             "notice": EMPTY_RESULT_NOTICE,
         }
+    # P6.4：快路径——路由层已用 fast_first=True 拿到 MySQL 原文响应，
+    # 这里直接降级补全（不调用 LLM），AI 文案由后台任务补全并刷新缓存
+    if state.fast_first:
+        result_state = await _degrade_recommendations(
+            state, ranked, notice=AI_PENDING_NOTICE
+        )
+        log_event(
+            logger,
+            logging.INFO,
+            "graph.generate.fast_first",
+            duration_ms=round((time.perf_counter() - started) * 1000, 1),
+            recommendations=len(result_state["recommendations"]),
+            degraded=True,
+        )
+        return {**result_state, "ai_pending": True}
     provider = get_llm_provider()
     if provider is None:
         result_state = await _degrade_recommendations(state, ranked)
@@ -389,9 +459,11 @@ async def _validate_recommendations(
 
 
 async def _degrade_recommendations(
-    state: CookState, ranked: list[RecipeCandidate]
+    state: CookState,
+    ranked: list[RecipeCandidate],
+    notice: str = GENERATE_DEGRADE_NOTICE,
 ) -> CookState:
-    """LLM 不可用/失败 → 一次查 MySQL 构造完整 Recommendation（steps=原文）。"""
+    """LLM 不可用/失败/快路径 → 一次查 MySQL 构造完整 Recommendation（steps=原文）。"""
     ids = [c.recipe_id for c in ranked]
     try:
         rows = await asyncio.to_thread(_load_recipes, ids)
@@ -422,7 +494,7 @@ async def _degrade_recommendations(
         **state.model_dump(),
         "recommendations": recommendations,
         "degraded": True,
-        "notice": GENERATE_DEGRADE_NOTICE,
+        "notice": notice,
     }
 
 

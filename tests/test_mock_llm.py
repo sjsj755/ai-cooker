@@ -120,11 +120,20 @@ def test_get_llm_provider_returns_mock_when_llm_mock(monkeypatch):
 
 def test_mock_llm_recommend_flow_backfills_facts(client, tmp_path, monkeypatch):
     """mock 输出走真实校验与防幻觉回填：事实字段以候选集为准，steps/tips 用 mock 文案。"""
+    import app.api.routes.recommend as rec_mod
+
     from tests.test_recommend_api import TITLE, _patch_deps, _seed_env
 
     rid, service, _chroma = _seed_env(tmp_path)
     provider = MockLLMProvider()
     _patch_deps(monkeypatch, service, llm=provider)
+    monkeypatch.setattr(
+        rec_mod,
+        "_settings",
+        rec_mod._settings.model_copy(
+            update={"recommend_fast_first_enabled": False}
+        ),
+    )
     try:
         resp = client.post(
             "/api/recipes/recommend",

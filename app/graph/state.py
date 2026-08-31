@@ -51,16 +51,23 @@ class CookState(BaseModel):
     parse_error: bool = False
     degraded: bool = False
     notice: str | None = None
+    # P6.4：快路径标记。True 时 generate_node 直接走 MySQL 原文降级补全
+    # （不调用 LLM），由路由层随后台任务补全 AI 文案并刷新缓存
+    fast_first: bool = False
+    # P6.4：快响应临时降级标记，路由层映射到 RecommendResponse.ai_pending
+    ai_pending: bool = False
 
 
 def empty_state(
     ingredients: list[str] | None = None,
     exclude_tags: list[str] | None = None,
     query: str = "",
+    fast_first: bool = False,
 ) -> CookState:
     """构造带默认值的初始状态，便于空状态跑通验收。"""
     return CookState(
         query=query,
         ingredients=ingredients or [],
         exclude_tags=exclude_tags or [],
+        fast_first=fast_first,
     )

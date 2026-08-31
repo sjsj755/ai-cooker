@@ -38,3 +38,15 @@ class RecommendResponse(BaseModel):
     recipes: list[Recommendation] = Field(default_factory=list)
     degraded: bool = False
     notice: str | None = None
+    # P6.4：快路径临时降级标记。True 表示“AI 文案生成中，稍后自动更新”，
+    # 前端据此渲染中性横幅并轮询 /api/recipes/recommend/status；其余 degraded
+    # 保持既有“降级提示”语义
+    ai_pending: bool = False
+
+
+class RecommendStatusResponse(BaseModel):
+    """P6.4 状态轮询：快响应后前端定期查询，AI 文案就绪即携带完整结果。"""
+
+    ready: bool = False
+    warming: bool = False
+    result: RecommendResponse | None = None

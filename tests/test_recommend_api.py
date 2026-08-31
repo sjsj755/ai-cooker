@@ -2,6 +2,7 @@
 
 import asyncio
 
+import app.api.routes.recommend as rec_mod
 from app.config import Settings
 from app.graph.linking import IngredientLinker
 from app.graph.state import Recommendation
@@ -77,6 +78,13 @@ def _patch_deps(monkeypatch, service, llm=None, tmp_path=None):
 
 def test_recommend_200_with_mock_llm(client, tmp_path, monkeypatch):
     rid, service, _chroma = _seed_env(tmp_path)
+    monkeypatch.setattr(
+        rec_mod,
+        "_settings",
+        rec_mod._settings.model_copy(
+            update={"recommend_fast_first_enabled": False}
+        ),
+    )
     llm = FakeLLM(
         parse_items=[("土豆",), ("鸡蛋",)],
         recommendation_set=RecommendationSet(
@@ -131,6 +139,13 @@ def test_recommend_200_with_mock_llm(client, tmp_path, monkeypatch):
 
 def test_recommend_degrade_fills_steps_from_mysql(client, tmp_path, monkeypatch):
     rid, service, _chroma = _seed_env(tmp_path)
+    monkeypatch.setattr(
+        rec_mod,
+        "_settings",
+        rec_mod._settings.model_copy(
+            update={"recommend_fast_first_enabled": False}
+        ),
+    )
     llm = FakeLLM(parse_items=[("土豆",), ("鸡蛋",)], fail_generate=True)
     _patch_deps(monkeypatch, service, llm)
     try:
