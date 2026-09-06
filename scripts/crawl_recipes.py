@@ -62,6 +62,7 @@ async def run(
     *,
     site: str = "xiachufang",
     source: str = "explore",
+    retry_failed: bool = False,
     limit: int | None = None,
     dry_run: bool = False,
     resume: bool = True,
@@ -96,7 +97,20 @@ async def run(
         warmup_url = (
             "https://m.xiachufang.com/" if source == "category" else "https://www.xiachufang.com/"
         )
-        await crawler.fetch_html(warmup_url)
+        try:
+            await crawler.fetch_html(warmup_url)
+        except (AntiBotBlocked, FallbackError):
+            if warmup_url == "https://www.xiachufang.com/":
+                warmup_url = "https://m.xiachufang.com/"
+                await crawler.fetch_html(warmup_url)
+            else:
+                raise
+            log_event(
+                logger,
+                logging.WARNING,
+                "crawl.cli.warmup_fallback",
+                url="https://m.xiachufang.com/",
+            )
         log_event(logger, logging.INFO, "crawl.xiachufang.parse.warmup", url=warmup_url)
         store = JsonStore(out_dir)
         state = store.load_state(site)
@@ -193,7 +207,38 @@ async def run(
             )
             return "saved"
 
-        if source == "explore":
+        if retry_failed:
+            failed_urls: list[str] = []
+            seen: set[str] = set()
+            for record in store.load_failed(site):
+                url = record.get("url")
+                if record.get("stage") != "parse" or not url or url in seen:
+                    continue
+                seen.add(url)
+                if store.exists(site, url) and resume and not force:
+                    continue
+                failed_urls.append(url)
+            log_event(
+                logger,
+                logging.INFO,
+                "crawl.xiachufang.parse.retry_failed",
+                urls=len(failed_urls),
+            )
+            for url in failed_urls:
+                if limit is not None and stats["saved"] >= limit:
+                    break
+                await process_url(url, discovered_from="retry-failed")
+            if not dry_run:
+                # 重试成功后清理失败清单：仅保留仍未落盘的 URL，按 (url, stage) 保留最新一条
+                latest: dict[tuple[str, str], dict] = {}
+                for record in store.load_failed(site):
+                    url = record.get("url") or ""
+                    if store.exists(site, url):
+                        continue
+                    latest[(url, record.get("stage") or "")] = record
+                store.rewrite_failed(site, [latest[k] for k in latest])
+
+        elif source == "explore":
             sources_state = state.setdefault("sources", {})
             page = int(sources_state.get("explore", {}).get("next_page", 1))
             while True:
@@ -303,6 +348,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="explore",
         help="索引源",
     )
+    parser.add_argument(
+        "--retry-failed",
+        action="store_true",
+        help="重试 failed.jsonl 中 parse 阶段失败的 URL 并清理已解决条目",
+    )
     parser.add_argument("--limit", type=int, default=None, help="本批最多落盘 N 条新菜谱")
     parser.add_argument("--dry-run", action="store_true", help="抓取+解析但不落盘")
     parser.add_argument("--resume", action="store_true", default=True, help="跳过已落盘（默认开）")
@@ -336,6 +386,7 @@ def main(argv: list[str] | None = None) -> int:
                     settings,
                     site=args.site,
                     source=args.source,
+                    retry_failed=args.retry_failed,
                     limit=args.limit,
                     dry_run=args.dry_run,
                     resume=args.resume,

@@ -1,148 +1,120 @@
 # AI 厨师（ai-cooker）
 
-基于已有食材的菜谱推荐系统：用户输入家里已有的食材，系统识别食材后检索菜谱库，推荐“缺料最少、最可行”的菜谱，并给出做法步骤、缺料提示和替代建议。
+基于已有食材的智能菜谱推荐系统：输入家里已有的食材（口语化描述即可，如“冰箱里有个大土豆和仨鸡蛋”），系统通过 LLM 识别食材、混合检索菜谱库，推荐“缺料最少、最可行”的菜谱，并给出做法步骤、缺料提示与替代建议。
 
-架构决策、流程图、兜底策略与实施计划见 [docs/PLAN.md](docs/PLAN.md)；数据库表结构、ER 图与 DDL 见 [docs/DB.md](docs/DB.md)。
+架构决策、核心流程图与兜底策略见 [docs/PLAN.md](docs/PLAN.md)，数据库表结构见 [docs/DB.md](docs/DB.md)。
 
-代码仓库：[github.com/sjsj755/ai-cooker](https://github.com/sjsj755/ai-cooker)（master）
+## 目录
+
+- [功能特性](#功能特性)
+- [工作原理](#工作原理)
+- [技术栈](#技术栈)
+- [目录结构](#目录结构)
+- [快速开始](#快速开始)
+- [配置说明](#配置说明)
+- [API 一览](#api-一览)
+- [测试与质量保障](#测试与质量保障)
+- [部署](#部署)
+- [相关文档](#相关文档)
+
+## 功能特性
+
+- **口语化输入，LLM 识别**：用户自由描述即可，LLM 结构化提取食材，再经“精确 → 别名 → 包含 → 向量相似”四级映射落到标准食材词典；未命中食材自动标记并给出缺料提示。实测识别准确率 0.944。
+- **混合检索，召回更准**：BM25 关键词与 Chroma 向量双路召回、RRF 融合排序，再叠加缺料数、覆盖率、难度与时长评分；向量库故障自动降级 BM25，服务不中断。实测 recall@5 = 0.755。
+- **LangGraph 工作流编排**：推荐主流程 parse → link → filter → retrieve → rank → generate 有状态编排，节点可插拔、可单测；条件边承载“重试”“提前结束”等兜底分支。
+- **防幻觉、防注入、防 XSS**：菜谱标题、评分、缺料、难度、时长等事实字段一律从候选集回填（recipe_id 白名单），LLM 只写 tips；提示词采用固定系统指令 + JSON 数据化嵌入；前端渲染全用 `createElement`/`textContent`，禁止 `innerHTML`。
+- **首次访问秒出结果**：缓存未命中时先以快路径返回 MySQL 原文（`ai_pending=true`），后台单飞任务补全 AI 文案，前端轮询状态后自动替换；TTL 缓存、启动预热与 BM25 索引落盘共同消除冷启动与重复查询开销。
+- **模型可替换**：LLM 与 Embedding 均为自研 OpenAI 兼容封装（httpx 直调、分批、指数退避），通过 `LLM_BASE_URL` / `EMBEDDING_BASE_URL` 一行配置即可切换 DeepSeek、Qwen、OpenAI 或本地 Ollama。
+- **反馈闭环**：匿名收藏 / 不喜欢（SHA-256 指纹 + 幂等 + 限流），支持导出与 LangSmith 追踪评测。
+- **工程化与部署**：pytest + Playwright 冒烟 + k6 压测门禁；Docker Compose 全栈 + Caddy 自动 HTTPS + 生产安全加固 + 备份脚本，GitHub Actions 自动执行。
+
+## 工作原理
+
+推荐请求由 LangGraph 有状态工作流驱动，各节点实现解耦、可单独替换：
+
+```mermaid
+flowchart LR
+    A["用户输入"] --> B["parse：LLM 结构化识别食材"]
+    B --> C["link：四级映射到食材词典"]
+    C --> D["filter：清洗去重并构造检索词"]
+    D --> E["retrieve：BM25 + 向量 · RRF 融合"]
+    E --> F["rank：缺料数 + 评分 · Top-5"]
+    F --> G["generate：LLM 生成推荐文案"]
+    G --> H["推荐结果"]
+```
+
+每层都有明确的兜底行为，避免 AI 链路单点故障拖垮整个服务：
+
+- parse 失败：自动重试 1 次，仍失败则返回“未能识别，请补充描述”；
+- 检索候选为空：提前结束，提示补充食材或放宽忌口；
+- Chroma 故障：retrieve 自动降级为仅 BM25；
+- LLM 超时 / 不可用：generate 降级直出 MySQL 原文（步骤、难度、时长完整，仅 tips 缺失并带 notice）；
+- MySQL 不可用：返回 503 友好错误，不进入工作流。
+
+快路径（默认开启，`RECOMMEND_FAST_FIRST_ENABLED=true`）：缓存未命中时先秒级返回 MySQL 原文，后台任务仅执行 generate 补全 AI 文案，成功后才写入长 TTL 缓存；前端通过 `POST /api/recipes/recommend/status` 轮询感知完成。
 
 ## 技术栈
 
-Python 3.14 + uv · FastAPI · SQLAlchemy 2.x + Alembic · LangGraph · MySQL 8.x（InnoDB + utf8mb4）· pytest
+| 层面 | 选型 |
+| --- | --- |
+| 后端 | Python 3.14（uv）· FastAPI · SQLAlchemy 2 + Alembic · LangGraph · httpx |
+| 数据 | MySQL 8（InnoDB + utf8mb4）· Chroma（本地持久化向量库）· Redis（限流存储，可选） |
+| AI | OpenAI 兼容 LLM / Embedding，可切换 DeepSeek / Qwen / OpenAI / Ollama |
+| 前端 | 原生 HTML / CSS / JS，FastAPI 同源托管，无构建链 |
+| 工程化 | pytest · Playwright · k6 · Docker Compose · Caddy · GitHub Actions |
 
-## 当前阶段：P0 已完成 → P1 已完成（parse + ingest）→ P2 检索层（已完成）→ P3 LangGraph 工作流（已完成，2026-08-29 验收通过）→ P4 前端（已完成，2026-08-29 验收通过：191 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_PLAN.md](docs/P4_PLAN.md)）→ P4.1 前端视觉与交互优化（已完成，2026-08-29 验收通过：194 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md)）→ P4.2 推荐页详情抽屉 + 食材/调料区分 + 感知性能优化（已完成，2026-08-29 验收通过：200 测试全绿 + 6 条 Playwright 冒烟；实施计划与验收结果见 [docs/P4_2_PLAN.md](docs/P4_2_PLAN.md)）→ P5 全量验收 + 用户反馈闭环（已完成，2026-08-29 验收通过：240 测试全绿 + 6 条 Playwright 冒烟 + k6 10k 门禁通过 + 50k 基线留痕；实施计划与验收结果见 [docs/P5_PLAN.md](docs/P5_PLAN.md)）→ P6 部署上线（代码实施完成 + 本机裸机验证，2026-08-29：269 测试全绿；Docker Compose 全栈 + Caddy 自动 HTTPS + 可信代理 IP + 安全加固 + 备份运维 + GitHub Actions 门禁；实施计划与验收结果见 [docs/P6_PLAN.md](docs/P6_PLAN.md)，Docker 全栈服务器实跑与 CI 实跑待回填）→ P6.1 推荐性能优化（已完成，2026-08-29 验收通过：284 测试全绿 + 13 skipped；推荐结果 TTL 缓存秒回 + 启动后台预热 + BM25/向量双路并行，实测见 README「P6.1」小节） → P6.2/P6.3 首访提速与兜底（已完成，2026-08-30：290 测试全绿 + 13 skipped） → P6.4 首次搜索提速（已完成，2026-08-31：313 测试全绿 + 13 skipped；快路径秒出原文 + 后台 AI 补全 + 冷启动收敛，实测见 README「P6.4」小节）
+## 目录结构
 
-P1 采集管线实施计划见 [docs/P1_PLAN.md](docs/P1_PLAN.md)，设计文档见 [docs/P1_COLLECTION_DESIGN.md](docs/P1_COLLECTION_DESIGN.md)；P2 检索层实施计划见 [docs/P2_PLAN.md](docs/P2_PLAN.md)；P3 LangGraph 工作流实施计划见 [docs/P3_PLAN.md](docs/P3_PLAN.md)；P4 前端实施计划见 [docs/P4_PLAN.md](docs/P4_PLAN.md)；P4.1 前端视觉与交互优化实施计划见 [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md)；P5 全量验收与用户反馈闭环实施计划见 [docs/P5_PLAN.md](docs/P5_PLAN.md)；P6 部署上线实施计划见 [docs/P6_PLAN.md](docs/P6_PLAN.md)。
-
-### P1（parse）交付物
-
-- `app/crawlers/xiachufang.py`：下厨房适配器（PC/移动详情解析 + explore/分类/sitemap URL 发现），已注册 registry
-- `app/core/seasoning_words.py`：33 组调料词表 + 别名归并（盐/油/生抽→酱油 等）与食材/调料分流
-- `app/core/html_clean.py`：去 script/style/控制字符、空白归一
-- `app/ingestion/json_store.py`：JSON 落盘（schema_version=1）、判重、`state.json` 断点、`failed.jsonl`
-- `scripts/crawl_recipes.py`：`--site xiachufang --stage parse [--source explore|category|sitemap] [--limit N] [--dry-run] [--force] [--delay N]`
-- 4 个真实页面 fixture + 26 个离线测试（全量 45 个通过）
-- 真实抓取已验收：`parse --limit 5` 产出含 `ingredients/seasonings/tags/steps` 的 JSON；站点限流/反爬观测见设计文档 §15
-
-### P1（ingest）交付物
-
-- `app/ingestion/pipeline.py`：扫描 JSON → 严格校验 → MySQL 幂等入库（调料新建行 `category='调料'`，同名归并防主键冲突）→ 分块 → 嵌入 → 先删旧块再 Chroma upsert（防孤儿块）；无效信封移 `invalid/`、单条失败写 `failed.jsonl`、连续 5 次失败熔断退出码 3
-- `app/core/openai_embeddings.py`：OpenAI 兼容真实嵌入（httpx 异步、分批、指数退避；缺 key 启动即退出码 3）
-- `app/vector_store.py`：Chroma `recipe_docs` 集合（cosine、确定性 ID 幂等、维度冲突明确报错、关闭匿名遥测）
-- `app/ingestion/text_builder.py`：结构单元分块——标题+描述/用料/每条步骤为不可切单元，贪心合并至 500 字、无字符 overlap，超长步骤按句号回退切分；块元数据含 `unit_type`/`step_start`/`step_end`
-- 健康检查：`/health/live`（恒 200）、`/health/ready`（DB + Chroma，故障 503）
-- `scripts/init_test_db.sql`：测试库预建脚本
-- `app/core/openai_llm.py`：OpenAI 兼容 LLM 实现（P3 消费）——`structured(prompt, schema)` 输出经 JSON 提取 + pydantic 强校验；`LLM_BASE_URL / LLM_MODEL / LLM_API_KEY` 可切 DeepSeek / Qwen / OpenAI / Ollama 等端点
-- 全量 81 个测试通过；真实 JSON 入库验收：7 条入 MySQL；**真实嵌入验收（2026-08-29）**：7 条 → 19 个语义块写入生产 `data/chroma`（阿里云百炼 `qwen3.7-text-embedding`，1024 维），重跑 0 新增、集合 19→19 稳定，`/health/live`、`/health/ready` 实测 200
-
-采集使用：
-
-```powershell
-uv run python scripts/crawl_recipes.py --site xiachufang --stage parse --limit 5
-uv run python scripts/crawl_recipes.py --site xiachufang --stage parse --dry-run
-uv run python scripts/crawl_recipes.py --site xiachufang --stage ingest
-# 真实嵌入需配置 EMBEDDING_API_KEY；本机验收用阿里云百炼 qwen3.7-text-embedding（1024 维），换服务商改 EMBEDDING_BASE_URL / EMBEDDING_MODEL
-# P3 LLM 兼容：LLM_BASE_URL / LLM_MODEL / LLM_API_KEY（如 DeepSeek / Qwen / Ollama；密钥留空则不带鉴权头）
+```text
+ai-cooker/
+├── app/
+│   ├── api/              # FastAPI 路由：health / ingredients / recipes / recommend / feedback
+│   ├── core/             # LLM 与 Embedding 封装、检索抽象、限流、安全、TTL 缓存、提示词
+│   ├── crawlers/         # 采集适配器（每站点一个，当前：下厨房）
+│   ├── db/               # SQLAlchemy 引擎与会话
+│   ├── graph/            # LangGraph 工作流：state / nodes / prompts / workflow
+│   ├── ingestion/        # 两阶段采集管线：JSON 落盘、入库、语义分块
+│   ├── models/           # SQLAlchemy 模型
+│   ├── retrieval/        # BM25、混合检索、缺料计算、评分与排序
+│   ├── schemas/          # API 出入参 Pydantic 模型
+│   └── vector_store.py   # Chroma 集合封装
+├── frontend/             # 原生前端：/ 推荐页、/search.html 搜索页
+├── migrations/           # Alembic 迁移
+├── scripts/              # 采集、种子、评测、e2e、k6、备份等脚本
+├── tests/                # pytest 用例与 fixture
+├── docs/                 # 架构、数据库与各阶段实施文档
+├── .env.example          # 环境变量模板
+├── docker-compose.yml    # MySQL + Redis + app + Caddy
+├── Dockerfile
+└── Caddyfile
 ```
 
-### P2（检索）交付物
-
-- `app/retrieval/`：`BM25Corpus`（中文 bigram 分词、语料缓存探针 `(COUNT(*), MAX(id), MAX(updated_at))`、双缓冲 + 锁、重建失败四态）、`HybridRetriever`（BM25 + Chroma 双路，块级 RRF 证据均值 `rrf()` 原语、向量距离阈值 0.5、四态降级）、`MissingIngredientsCalculator`（调料排除、可用食材纯精确匹配）、`DefaultScoringStrategy`（融合归一 + 覆盖率 + 难度/时长微调）、`RankingService`（缺料数优先字典序排序）
-- `GET /api/recipes/search`：`q` + `ingredients` + `exclude_tags` + `limit`，注册于 `/{recipe_id}` 之前；响应 `SearchResponse{recipes, degraded, notice}`；空结果带提示、MySQL 故障 503
-- LangGraph：`CookState.query` + `retrieve_node`（`state.query` 为唯一检索文本）/ `rank_node`（Top-5）
-- 食材联想向量库：`scripts/index_ingredients.py` 幂等写入 `ingredients_docs`；`/api/ingredients/search` LIKE 不足时向量补充合并去重，失败回退 LIKE-only
-- `scripts/cleanup_orphan_chunks.py`（`--dry-run`）、`scripts/seed_synthetic_recipes.py`、`scripts/eval_retrieval.py`（50 用例 recall@5/coverage、单路 vs 混合、1k/5k 性能基线）
-- 表结构变更：`recipes.updated_at`（DDL 级 `ON UPDATE CURRENT_TIMESTAMP(3)`，迁移 `b2e7f1c4a9d3`）
-- 全量 134 个测试通过；真实环境验收（2026-08-29）：`GET /api/recipes/search?q=土豆 鸡蛋&ingredients=土豆,鸡蛋` 混合检索 `degraded=false`、缺 0 料排最前；无意义查询返回空 + notice；评测 recall@5=0.755（≥0.7）、混合 ≥ 单路；1k 语料构建 113ms/查询 P95 23ms、5k 构建 397ms/查询 P95 6.4ms
-
-> 阿里云百炼 compatible-mode 的 embedding 单批上限 20：使用百炼时在 `.env` 设 `EMBEDDING_BATCH_SIZE=20`（已按此验收）。
-
-### P3（LangGraph 工作流）交付物
-
-- `app/graph/state.py`：`CookState` 改为 Pydantic BaseModel（字段默认值即通道默认值），`retry_count=0` 显式初始化，直接 `ainvoke({})` 也不缺键；节点统一 `{**state.model_dump(), ...}` 全量展开，合并保留未更新键
-- `app/graph/prompts.py` + `parse_node`：LLM 自由文本食材识别（`IngredientExtractionList` 强校验 + 防注入隔离），失败按 `retry_count <= RECOMMEND_MAX_PARSE_RETRIES`（默认 1，最多 2 次 parse）唯一决策点重试，超限降级结束（`degraded` + notice）
-- 提示词规范化（v1.1）：`app/core/prompts.py` 固定系统提示词（指令层级 + JSON-only + 禁虚构）+ `app/graph/prompts.py` 统一四段式模板（任务 → JSON 只读数据块 → 约束 → 输出要求）；不可信用户内容经清洗 + `json.dumps` 数据化嵌入，注入文本无法改写指令；模板为确定性纯函数（同输入同输出）
-- `app/graph/linking.py` + `link_node`：四级映射（精确 → 别名 → 包含 → `ingredients_docs` 向量，相似度阈值 0.85 可配），向量不可用自动降级三级映射（不报错），未命中 `unknown=True`
-- `filter_node`：清洗去重、≤30 项 / 单项 ≤50 字拦截、构造 `state.query`（标准名优先，未映射用 raw_name）与 `state.ingredients`（缺料计算）
-- `generate_node`：LLM 生成 `RecommendationSet`，防幻觉（recipe_id 白名单 + 越界/重复丢弃 + WARN；title/分数/缺料/难度/时长等事实字段一律以候选集为准回填，LLM 只写一句话 tips——v1.2 起 steps 由 MySQL 原文回填，生成输出体量骤降、耗时从 8-17s 降至约 3-5s；输出按候选序去重稳定排序）；LLM 失败 / 无 key 降级直出 MySQL 原文（steps/difficulty/cook_time 完整，`tips=None` + notice），MySQL 不可用则 503
-- P6.3 首访兜底：generate 硬超时 `LLM_GENERATE_TIMEOUT_SECONDS`（默认 10s）——LLM 拥堵/超时即秒级降级直出 MySQL 原文，最坏延迟可预期（不再出现 90s+ 的三次 30s 重试）；LLM 结构化调用重试次数可配 `LLM_MAX_ATTEMPTS`（默认 2）
-- `workflow.py`：条件边（parse 重试唯一决策点、query 为空降级结束、候选为空结束、generate 降级）
-- `POST /api/recipes/recommend`：501 → 200，响应 `recipes: list[Recommendation]`；空食材 400、检索不可用 503
-- 配置：`RECOMMEND_TOP_K=5`、`RECOMMEND_MAX_PARSE_RETRIES=1`、`LINK_VECTOR_SIMILARITY_THRESHOLD=0.85`
-- P2 遗留：`ChromaStore.iter_chunk_metadata` 分页（batch=1000）+ 单页失败重试、仍失败中止（`FallbackError` 含 offset/batch）；`cleanup_orphan_chunks.py` 改扫描-比对-删除分离 + `--max-retries`，失败退出码 3
-- 评测：`scripts/eval_recommend.py`（10 条识别用例项级准确率基线 ≥0.85，实测 17/18 = 0.944）
-- 全量 171 个测试通过（134 + 新增 37）；真实环境验收（2026-08-29）：`ingredients=["土豆","鸡蛋"]` 实调 DeepSeek + 阿里云嵌入 → `degraded=false`、21 候选、LLM 推荐 4 条含步骤；5 并发 mock-LLM 全流程 < 5s
-
-### P4（前端 · 已完成）
-
-- FastAPI 同源托管原生 HTML/CSS/JS（`frontend/`）：推荐主页 `/`（食材 chips + 联想 debounce 300ms + 忌口/口味多选 + 推荐卡片，含缺料 / 步骤 / 难度 / 时长 / 降级横幅）+ 搜索页 `/search.html`（复用 P2 检索 + 详情抽屉，来源外链 `noopener noreferrer`）
-- 请求层 `api.js` 的 `createTaskRegistry`：按任务类型（`tags` / `autocomplete` / `recommend` / `search` / `detail`）维护 AbortController，重试先中断在途请求（幂等）、默认 5s 超时（`recommend` 任务 30s，适配真实 LLM 波动）、AbortError 分类（主动中断静默 / 超时与断网与 5xx 附重试按钮）；业务状态由页面脚本持有，`ui.js` 无状态渲染（全 `createElement` + `textContent` 防 XSS）
-- 配置：`FRONTEND_DIR=./frontend`（`app/config.py`）；`app/main.py` 在 `include_router` 之后挂载 StaticFiles，`/api/*`、`/docs` 不受影响
-- 6 条 Playwright 冒烟脚本（`scripts/e2e/`，`E2E_BASE_URL` 默认 `http://127.0.0.1:8000`）；`tests/test_frontend.py` 10 用例（静态路由 / 资源完整性 / 安全扫描 / 调用契约 / label for 匹配）；全量 191 测试通过
-
-### P4.1（前端视觉与交互优化 · 已完成）
-
-- 纯净浅色 + 暖橙设计令牌（`#fafaf8` 底 / 纯白表面 / `#d9772e` 主色），收敛多色面板（仅降级横幅与错误保留语义色），统一圆角与柔和阴影
-- 推荐卡做法步骤折叠：一次只展开一张；`hidden` 容器常驻 + 全量重建 + `data-toggle-id` 焦点恢复（`focus({ preventScroll: true })`）+ `aria-expanded`/`aria-controls` 同步；ui.js 保持无状态
-- 详情抽屉打开聚焦关闭按钮 + `drawer-open` 锁定页面滚动，关闭恢复焦点到触发元素；按钮 `.is-loading` 加载态 + `aria-busy`；文案精简、移除页脚、新增 `favicon.svg`
-- 同步更新 `tests/test_frontend.py`（新增 favicon 资源完整性 + 折叠/抽屉静态契约 3 用例）与 `smoke_recommend_happy.py`（点击“做法”后断言步骤可见 / `aria-expanded="true"` / 按钮聚焦）；全量 194 测试全绿 + 6 条 Playwright 冒烟通过
-
-### P4.2（推荐页详情抽屉 + 食材/调料区分 + 感知性能优化 · 已完成）
-
-- 推荐页复刻搜索页“查看详情”抽屉：推荐卡新增「所需调料」行与「查看详情」按钮，点击弹出抽屉（ESC / 遮罩 / × 关闭、滚动锁定、焦点恢复与搜索页一致）
-- 抽取 `frontend/js/createDetailDrawerManager.js`：两页共用抽屉状态机（缓存 / 防重发 / 切换 abort / 焦点恢复 / 清空）统一由工厂管理，`destroy` 生命周期杜绝 keydown 监听累积
-- 全站详情区分「所需食材」与「调料」（名称 + 用量）；`Recommendation.seasonings` 与 `RecipeOut.ingredients/seasonings` 由 MySQL 回填（以事实为准、不信 LLM）；调料判定与缺料计算一致（`category=='调料'`），详情 JOIN 经 EXPLAIN 验证走主键索引
-- 感知性能优化：打开抽屉立即渲染骨架 + 加载圆环（复用 `.is-loading` 动画），数据返回后替换内容；推荐卡折叠改为数据未变时增量切换 `hidden` / `aria-expanded`（`lastRenderedResults` 引用浅比较），仅数据变化才全量重建
-- 交付后修复：匹配度徽章改为按本批最高分归一化展示（`match_score` 是 RRF 融合分、绝对量纲极小，此前真实数据全部显示 1%），推荐 / 搜索两页共用，后端契约不变
-- 全量 200 测试全绿 + 6 条 Playwright 冒烟通过；视觉截图 `.tmp_bridge/p4_2_*.png` 供浏览器复核
-
-### P6.1（推荐性能优化 · 已完成）
-
-- 推荐结果内存 TTL 缓存（`RECOMMEND_CACHE_TTL_SECONDS` 默认 600s，0=关闭）：键为归一化后的食材+忌口（清洗/去重/排序，顺序无关），重复/相似查询直接秒回；仅缓存非降级结果，LLM/检索故障恢复后立即生效，不“粘住”
-- 启动后台预热（`WARMUP_ON_STARTUP` 默认开启）：lifespan 后台预构建 BM25 语料 + 触碰 Chroma 集合，把冷启动（实测 30-60s，超过前端 recommend 30s 超时）移出首个用户请求路径
-- BM25 与向量双路检索并行（`hybrid._retrieve` 拆分 `_bm25_path` / `_vector_path` 后并发执行）：热态检索耗时约减半，冷启动时语料构建与 Chroma 加载同时进行；降级 / 503 语义与原串行版完全一致
-- 配置：`RECOMMEND_CACHE_TTL_SECONDS` / `RECOMMEND_CACHE_MAX_ENTRIES` / `WARMUP_ON_STARTUP`（`.env.example` 已同步；测试环境默认关闭缓存与预热，保证用例隔离）
-- 验证（2026-08-29，本机 + 花生壳公网）：番茄/鸡蛋 首次 17.5s → 二次 0.008s；土豆/鸡蛋 首次 13.2s → 二次 0.003s；公网 https://12926kduk6079.vicp.fun/ 重复推荐 0.26s；全量 284 passed + 13 skipped
-- P6.2/P6.3 追加（2026-08-30）：generate 改只写一句话 tips、steps 由 MySQL 原文回填（5 候选实测 6.25s，原 8-17s），并加 10s 硬超时兜底（超时降级直出原文，不再随 DeepSeek 拥堵无限等待）；全量 290 passed + 13 skipped
-
-### P6.4（首次搜索提速 · 已完成）
-
-- 快路径 + 后台 AI 补全：缓存未命中时 `POST /api/recipes/recommend` 先以 `fast_first=true` 跑图，秒级（约 2-5s）返回 MySQL 原文（`degraded=true` + `ai_pending=true` + notice「AI 文案生成中，稍后自动更新」）；随后按缓存键单飞触发后台任务，复用已算好的 `ranked` 直接补全 AI 文案（一句话 tips），成功后写长缓存（600s），失败不写（降级缓存 30s 后自然重试，不“粘住”）。
-- 前端感知：新增 `POST /api/recipes/recommend/status`（独立限流 30/min，不占 recommend 配额），返回 `{ready, warming, result}`；前端收到快响应后每 3s 轮询、最多 10 次，`ready=true` 自动替换为完整 AI 推荐，`warming=false` 停止并保留快结果（横幅提示可重新推荐）。响应新增 `ai_pending` 字段，快响应渲染中性横幅而非“降级提示”。
-- 识别阶段有界：`LLM_PARSE_TIMEOUT_SECONDS`（默认 8s）硬超时 + parse 结果内存缓存（`PARSE_CACHE_TTL_SECONDS` 默认 24h，命中跳过 LLM，键为清洗后食材列表）。
-- 网络/向量复用：LLM 与 Embedding 改进程级共享 `httpx.AsyncClient`（keep-alive）；embedding 查询缓存（`EMBEDDING_CACHE_TTL_SECONDS` 默认 24h，键含模型名）。
-- 冷启动收敛：BM25 索引磁盘持久化（`BM25_CACHE_ENABLED=true`、`BM25_CACHE_FILE=./data/cache/bm25.pkl`，探针一致直接加载约 1-2s）+ 启动有限等待预热（`WARMUP_WAIT_SECONDS` 默认 10s），重启后首个请求不再撞上索引构建。
-- 配置：`RECOMMEND_FAST_FIRST_ENABLED`（默认开；置 false 恢复“首访即完整全链路”旧语义）/ `RATE_LIMIT_STATUS_PER_MINUTE`（默认 30）等，`.env.example` 已同步；测试环境默认关闭 parse/embedding/BM25 缓存。
-- 验证（2026-08-31，本机单测）：快路径不调 generate LLM 且含 MySQL 原文；status 五态与失败标记生命周期；返回深拷贝隔离；后台补全后二次请求返回 AI 文案；全量 313 passed + 13 skipped
-
-当前文档记录的 P0 交付物：
-
-- FastAPI 应用工厂 + `/health`（含 DB 连通检查）
-- `docker-compose.yml`（MySQL 8.4）+ `.env.example` + `.gitignore`
-- 6 张表 SQLAlchemy 模型与 Alembic 初始迁移（可重复执行）
-- 接口抽象层：`LLMProvider` / `EmbeddingProvider` / `Retriever` / `ScoringStrategy` / `RecipeCrawler`（P1 已提供 OpenAI 兼容实现 `OpenAICompatibleEmbeddings` / `OpenAICompatibleLLM`）
-- 兜底框架：`retry_with_backoff`（指数退避 + jitter）、`DegradedResult`、`FallbackError`、`degrade()`
-- LangGraph 空图：`parse → link → filter → retrieve → rank → generate`，可编译、空状态跑通
-- API：`GET /api/ingredients/search`、`GET /api/recipes/{id}`、`GET /api/tags` 返回真实数据；`POST /api/recipes/recommend` 返回 501 占位（P3 实现）
-- 食材词典种子：32 个常见食材 + 5 个标签，幂等 upsert
+`data/`（Chroma 持久化、采集产物、BM25 索引）在运行时创建，已被 `.gitignore` 忽略。
 
 ## 快速开始
 
-### 方式 A：Docker MySQL（推荐）
+### 环境要求
 
-```powershell
-cp .env.example .env
-docker compose up -d mysql
-uv sync
-uv run alembic upgrade head
-uv run python scripts/seed_dictionary.py
-uv run pytest
-uv run uvicorn app.main:app --reload
+- Python 3.14+ 与 [uv](https://docs.astral.sh/uv/)（仅使用 Docker 部署时可省略）；
+- MySQL 8.x（本地开发用 Docker 或本机实例均可）。
+
+### 1. 准备数据库
+
+方式 A：Docker 启动 MySQL（不影响宿主机环境）
+
+```bash
+docker run -d --name ai-cooker-mysql \
+  -e MYSQL_ROOT_PASSWORD=root \
+  -e MYSQL_DATABASE=ai_cooker \
+  -e MYSQL_USER=ai_cooker \
+  -e MYSQL_PASSWORD=ai_cooker \
+  -p 3306:3306 \
+  mysql:8.4
 ```
 
-### 方式 B：本机已有 MySQL
+> 3306 已被占用时改用 `-p 3307:3306`，并同步修改 `.env` 中的 `DATABASE_URL`。
 
-1. 用 root 创建库与账号：
+方式 B：本机已有 MySQL，用 root 预建库与账号
 
 ```sql
 CREATE DATABASE IF NOT EXISTS ai_cooker CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -151,28 +123,133 @@ GRANT ALL PRIVILEGES ON ai_cooker.* TO 'ai_cooker'@'localhost';
 FLUSH PRIVILEGES;
 ```
 
-2. 复制 `.env.example` 为 `.env`（默认连接串即指向本机 3306），随后执行与方式 A 相同的迁移、种子、测试命令。
+### 2. 初始化并启动
 
-> 说明：P0 验收在本机使用方式 B（本机 MySQL 8.0.29 已监听 3306，与 docker-compose 端口冲突，二选一即可）。
+```bash
+cp .env.example .env   # Windows PowerShell 使用：Copy-Item .env.example .env
+uv sync
+uv run alembic upgrade head
+uv run python scripts/seed_dictionary.py
+uv run uvicorn app.main:app --reload
+```
+
+启动后访问：
+
+- 推荐页：http://127.0.0.1:8000
+- 搜索页：http://127.0.0.1:8000/search.html
+- 交互式 API 文档：http://127.0.0.1:8000/docs（`DOCS_ENABLED=true` 时）
+
+### 3. 准备菜谱数据（二选一）
+
+合成数据（无网络、无需密钥，适合开发与联调）：
+
+```bash
+uv run python scripts/seed_synthetic_recipes.py --count 10000
+```
+
+真实采集（可选；采集遵守下厨房 robots.txt，`ingest` 阶段需配置 `EMBEDDING_*`）：
+
+```bash
+uv run python scripts/crawl_recipes.py --site xiachufang --stage parse --limit 5
+uv run python scripts/crawl_recipes.py --site xiachufang --stage ingest
+```
+
+### 4. 无 LLM Key 本地联调
+
+在 `.env` 中设置 `LLM_MOCK=true` 即可获得确定性、零网络调用的推荐结果；接入真实模型时改为 `LLM_MOCK=false`，并配置 `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY`。
+
+### 5. 快速验证
+
+```bash
+curl http://127.0.0.1:8000/health/ready
+
+curl -X POST http://127.0.0.1:8000/api/recipes/recommend \
+  -H "Content-Type: application/json" \
+  -d '{"ingredients": ["土豆", "鸡蛋"], "exclude_tags": []}'
+```
+
+## 配置说明
+
+所有配置项通过环境变量 / `.env` 注入（模板见 [.env.example](.env.example)，默认值与校验见 `app/config.py`）。常用分组如下：
+
+| 分组 | 关键变量 | 说明 |
+| --- | --- | --- |
+| 数据库 | `DATABASE_URL` | SQLAlchemy 连接串，默认指向本机 3306 的 `ai_cooker` 库 |
+| LLM | `LLM_BASE_URL` / `LLM_MODEL` / `LLM_API_KEY` | OpenAI 兼容端点，可切换 DeepSeek / Qwen / OpenAI / Ollama；`LLM_MOCK=true` 使用确定性 mock |
+| Embedding | `EMBEDDING_BASE_URL` / `EMBEDDING_MODEL` / `EMBEDDING_API_KEY` | 同上；阿里云百炼 compatible-mode 单批上限 20，需设 `EMBEDDING_BATCH_SIZE=20` |
+| 推荐工作流 | `RECOMMEND_TOP_K` / `RECOMMEND_FAST_FIRST_ENABLED` / `RECOMMEND_CACHE_TTL_SECONDS` 等 | Top-N、快路径开关、结果与 parse 缓存 |
+| 检索与评分 | `RETRIEVAL_*` / `SCORING_*` | BM25 / 向量权重与 RRF 融合参数（两路权重之和必须为 1） |
+| 启动预热 | `WARMUP_ON_STARTUP` / `WARMUP_WAIT_SECONDS` / `BM25_CACHE_ENABLED` | 后台预构建索引、冷启动收敛 |
+| 限流 | `RATE_LIMIT_ENABLED` / `RATE_LIMIT_STORAGE` / 各接口配额 | 默认关闭；生产多 worker 必须使用 `redis` 存储 |
+| 安全与部署 | `BEHIND_PROXY` / `FORWARDED_ALLOW_IPS` / `ALLOWED_HOSTS` / `DOCS_ENABLED` / `FEEDBACK_SALT` | 可信代理 IP、Host 白名单、文档开关、匿名反馈盐 |
 
 ## API 一览
 
-| 方法 | 路径 | 说明 | 状态 |
-|---|---|---|---|
-| GET | `/health` | 健康检查（含 DB） | P0 完成 |
-| GET | `/api/ingredients/search?q=` | 食材联想（LIKE + 向量补充） | P0 完成 / P2 增强 |
-| GET | `/api/recipes/search?q=&ingredients=&exclude_tags=` | 混合检索（BM25 + 向量 + 缺料/评分） | P2 完成 |
-| GET | `/api/recipes/{id}` | 菜谱详情 | P0 完成（空库返回 404） |
-| GET | `/api/tags` | 标签列表 | P0 完成 |
-| POST | `/api/recipes/recommend` | 推荐（LangGraph 工作流） | P3 完成 |
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/health` | 健康检查（含 DB 连通） |
+| GET | `/health/live` | 存活探针，恒 200 |
+| GET | `/health/ready` | 就绪探针（DB + Chroma），故障返回 503 |
+| GET | `/api/ingredients/search?q=` | 食材联想（LIKE + 向量补充） |
+| GET | `/api/recipes/search?q=&ingredients=&exclude_tags=` | 混合检索（BM25 + 向量 + 缺料 / 评分） |
+| GET | `/api/recipes/{id}` | 菜谱详情（含食材 / 调料 / 步骤） |
+| GET | `/api/tags` | 忌口 / 口味标签列表 |
+| POST | `/api/recipes/recommend` | 推荐：`{ingredients, exclude_tags}` → `{recipes, degraded, notice?, ai_pending?}` |
+| POST | `/api/recipes/recommend/status` | 快路径状态轮询：AI 文案就绪后返回完整结果 |
+| POST | `/api/feedback` | 匿名收藏 / 不喜欢：`{recipe_id, action: like\|dislike}` |
 
-交互式文档：`http://127.0.0.1:8000/docs`
+请求示例：
 
-## 已知限制与待办
+```json
+{
+  "ingredients": ["土豆", "鸡蛋", "番茄"],
+  "exclude_tags": ["辣"]
+}
+```
 
-详见 [docs/PLAN.md](docs/PLAN.md) 第 8.8 节“复盘：已知不足与整改”。要点：
+推荐结果中每条 `recipes` 包含菜谱标题、匹配度、缺料清单、难度、时长、做法步骤、tips 与所需调料，来源字段均由 MySQL 原文回填。
 
-- API 限流与全量压测尚未自动化，归入 P5（P0/P1 手工基线、P2 检索 1k/5k 基线已记录）；
-- 测试库 `ai_cooker_test` 需 root 预建并授权；
-- `uv audit` 报 chromadb 1.5.9 共 5 项已知漏洞（2026 年新披露、暂无修复版本）；本地单用户部署（遥测关闭、无鉴权服务）风险有限，已记录待上游修复后升级，检索可降级 BM25 不阻塞；
-- 首次 `uv sync` / `uv audit` 需要外网访问。
+## 测试与质量保障
+
+运行全部测试：
+
+```bash
+uv run pytest
+```
+
+> 测试需要可用的 `ai_cooker_test` 库：本机可用 `scripts/init_test_db.sql` 预建，CI 由 GitHub Actions 内置 MySQL 服务提供。
+
+- **自动化测试**：覆盖采集解析、入库、检索、LangGraph 工作流、API、前端静态契约、安全、限流与部署脚本；最近一次全量验收（2026-08-31）为 313 passed + 13 skipped。
+- **端到端冒烟**：6 条 Playwright 脚本（`scripts/e2e/`）覆盖推荐、搜索、详情抽屉、忌口过滤、降级横幅与食材联想。
+- **压测门禁**：k6 场景位于 `scripts/k6/`，CI 在 10k 合成语料上执行 search / detail / ingredients / tags / recommend / feedback / rate_limit 门禁（实测 search P95 120ms、detail 38ms、recommend mock 148ms，错误率 < 1%）。
+- **离线评测**：`scripts/eval_retrieval.py`（召回基线，实测 recall@5 = 0.755）、`scripts/eval_recommend.py`（识别准确率基线 ≥ 0.85，实测 0.944）。
+- **CI**：每次 push / PR 自动执行 uv 同步 → 迁移 / 种子 → pytest → Playwright → k6，见 [.github/workflows/ci.yml](.github/workflows/ci.yml)。
+
+## 部署
+
+Docker Compose 全栈部署（app + MySQL + Redis + Caddy），Caddy 自动申请 HTTPS：
+
+```bash
+cp .env.example .env
+# 填写生产必填项：MYSQL_PASSWORD / MYSQL_ROOT_PASSWORD / REDIS_PASSWORD /
+# CADDY_DOMAIN（已解析到本机的域名）/ ALLOWED_HOSTS / FEEDBACK_SALT
+docker compose up -d --build
+```
+
+- app 容器启动前自动等待 MySQL 并执行 Alembic 迁移（`scripts/docker-entrypoint.sh`）；
+- `data/` 目录绑定挂载，Chroma 与 BM25 索引随卷持久化；
+- 生产默认关闭 `/docs`、启用安全响应头与 Host 白名单；可信代理 IP 白名单保证反代后限流与反馈指纹按真实客户端 IP 计数；
+- 运维脚本：[scripts/start.sh](scripts/start.sh)（启动前 fail-fast 校验）、[scripts/backup.sh](scripts/backup.sh)（MySQL 无锁备份 + Chroma 目录打包，支持 `--dry-run` 预演）；
+- 部署细节、验证过程与运维说明见 [docs/P6_PLAN.md](docs/P6_PLAN.md)。
+
+## 相关文档
+
+| 文档 | 说明 |
+| --- | --- |
+| [docs/PLAN.md](docs/PLAN.md) | 架构决策、核心流程图、兜底策略矩阵、阶段总览 |
+| [docs/DB.md](docs/DB.md) | 数据库表结构、ER 图与 DDL |
+| [docs/P1_COLLECTION_DESIGN.md](docs/P1_COLLECTION_DESIGN.md) | 采集设计：robots 合规、限速、断点续采 |
+| [docs/P1_PLAN.md](docs/P1_PLAN.md) · [docs/P2_PLAN.md](docs/P2_PLAN.md) · [docs/P3_PLAN.md](docs/P3_PLAN.md) | P1 采集入库 / P2 检索层 / P3 推荐工作流实施与验收 |
+| [docs/P4_PLAN.md](docs/P4_PLAN.md) · [docs/P4_1_PLAN.md](docs/P4_1_PLAN.md) · [docs/P4_2_PLAN.md](docs/P4_2_PLAN.md) | 前端与交互优化各阶段实施与验收 |
+| [docs/P5_PLAN.md](docs/P5_PLAN.md) · [docs/P6_PLAN.md](docs/P6_PLAN.md) | 验收、限流、反馈闭环与部署上线实施与验收 |
+| [docs/EXTENSIONS.md](docs/EXTENSIONS.md) | 扩展点：新增采集站点、检索后端、模型供应商 |

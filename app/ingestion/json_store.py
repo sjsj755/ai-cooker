@@ -91,6 +91,32 @@ class JsonStore:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
         return path
 
+    def load_failed(self, site: str) -> list[dict]:
+        """读取失败清单（无文件 / 空行时返回空列表）。"""
+        path = self.site_dir(site) / "failed.jsonl"
+        if not path.exists():
+            return []
+        records: list[dict] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+        return records
+
+    def rewrite_failed(self, site: str, records: list[dict]) -> Path:
+        """原子覆写失败清单（用于重试成功后清理已解决条目）。"""
+        path = self.site_dir(site) / "failed.jsonl"
+        tmp = path.with_suffix(".jsonl.tmp")
+        tmp.write_text(
+            "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(tmp, path)
+        return path
+
     def load_state(self, site: str) -> dict:
         path = self.site_dir(site) / "state.json"
         if not path.exists():

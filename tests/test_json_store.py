@@ -62,6 +62,28 @@ def test_failed_jsonl(tmp_path):
         encoding="utf-8"
     ).splitlines()
     assert len(lines) == 2
+    records = store.load_failed("xiachufang")
+    assert [r["error"] for r in records] == ["x", "y"]
+
+
+def test_rewrite_failed(tmp_path):
+    store = JsonStore(tmp_path)
+    store.append_failed(
+        "xiachufang",
+        {"url": "https://www.xiachufang.com/recipe/1/", "stage": "parse"},
+    )
+    store.append_failed(
+        "xiachufang",
+        {"url": "https://www.xiachufang.com/recipe/2/", "stage": "ingest"},
+    )
+    store.rewrite_failed(
+        "xiachufang",
+        [{"url": "https://www.xiachufang.com/recipe/2/", "stage": "ingest"}],
+    )
+    assert [r["url"] for r in store.load_failed("xiachufang")] == [
+        "https://www.xiachufang.com/recipe/2/"
+    ]
+    assert store.load_failed("xiachufang")[0]["stage"] == "ingest"
 
 
 def test_state_round_trip(tmp_path):

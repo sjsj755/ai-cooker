@@ -33,6 +33,13 @@ def setup_logging(level: str = "INFO") -> None:
     global _CONFIGURED
     if _CONFIGURED:
         return
+    # Windows 控制台默认 GBK 无法编码 emoji 等字符，替换为 ? 避免日志崩溃
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (OSError, ValueError):
+                pass
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()

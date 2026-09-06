@@ -7,6 +7,7 @@ import httpx
 
 from app.config import Settings
 from app.crawlers.xiachufang import parse_explore_index
+from app.ingestion.json_store import JsonStore
 from scripts.crawl_recipes import main, run
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -83,6 +84,29 @@ def test_failed_recorded(tmp_path):
     failed = (tmp_path / "xiachufang" / "failed.jsonl").read_text(encoding="utf-8")
     assert urls[0] in failed
     assert "parse" in failed
+
+
+def test_retry_failed_saves_and_cleans(tmp_path):
+    urls, _ = parse_explore_index(_fixture("xiachufang_index.html"))
+    url = urls[0]
+    store = JsonStore(tmp_path)
+    store.append_failed("xiachufang", {"url": url, "stage": "parse", "error": "旧失败"})
+    store.append_failed("xiachufang", {"url": url, "stage": "ingest", "error": "旧失败"})
+    assert _run(tmp_path, retry_failed=True) == 0
+    assert store.exists("xiachufang", url)
+    assert store.load_failed("xiachufang") == []
+
+
+def test_retry_failed_keeps_failure(tmp_path):
+    urls, _ = parse_explore_index(_fixture("xiachufang_index.html"))
+    url = urls[0]
+    store = JsonStore(tmp_path)
+    store.append_failed("xiachufang", {"url": url, "stage": "parse", "error": "旧失败"})
+    assert _run(tmp_path, retry_failed=True, transport=_transport(fail_url=url)) == 1
+    assert not store.exists("xiachufang", url)
+    records = store.load_failed("xiachufang")
+    assert any(r["url"] == url for r in records)
+    assert records[-1]["error"] != "旧失败"
 
 
 def test_ingest_dry_run_without_key(tmp_path):

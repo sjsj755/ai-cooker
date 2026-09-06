@@ -241,23 +241,26 @@ class XiaChuFangCrawler(RecipeCrawler):
         html: str | None = None,
         source_url: str | None = None,
     ) -> CrawledRecipe:
-        """抓取并解析详情页；PC 被反爬拦截时自动回退移动端同 URL。"""
+        """抓取并解析详情页；PC 被反爬拦截或 429/5xx 时自动回退移动端同 URL。"""
         if html is not None:
             return self.parse_recipe_html(url, html, source_url=source_url)
         try:
             html = await self.fetch_html(url)
-        except AntiBotBlocked:
-            if urlparse(url).hostname == "www.xiachufang.com":
-                m_url = _normalize_url(url).replace(
-                    "https://www.xiachufang.com", "https://m.xiachufang.com"
-                )
+        except (AntiBotBlocked, FallbackError) as exc:
+            if urlparse(url).hostname != "www.xiachufang.com":
+                raise
+            m_url = _normalize_url(url).replace(
+                "https://www.xiachufang.com", "https://m.xiachufang.com"
+            )
+            try:
                 html = await self.fetch_html(m_url)
-                return self.parse_recipe_html(
-                    m_url,
-                    html,
-                    source_url=source_url or _normalize_url(url),
-                )
-            raise
+            except Exception:
+                raise exc from None
+            return self.parse_recipe_html(
+                m_url,
+                html,
+                source_url=source_url or _normalize_url(url),
+            )
         return self.parse_recipe_html(url, html, source_url=source_url)
 
     def parse_recipe_html(
@@ -322,8 +325,12 @@ class XiaChuFangCrawler(RecipeCrawler):
             )
 
         steps = [
-            clean_multiline(p.get_text())
-            for p in soup.select("div.steps ol li p.text")
+            s
+            for s in (
+                clean_multiline(p.get_text())
+                for p in soup.select("div.steps ol li p.text")
+            )
+            if s.strip()
         ]
         if not steps and ld and ld.get("recipeInstructions"):
             steps = _split_instructions(str(ld["recipeInstructions"]))
@@ -370,8 +377,12 @@ class XiaChuFangCrawler(RecipeCrawler):
             )
 
         steps = [
-            clean_text(p.get_text())
-            for p in soup.select("section#steps .recipe-steps .step .step-text")
+            s
+            for s in (
+                clean_text(p.get_text())
+                for p in soup.select("section#steps .recipe-steps .step .step-text")
+            )
+            if s.strip()
         ]
         if not steps and ld and ld.get("recipeInstructions"):
             steps = _split_instructions(str(ld["recipeInstructions"]))

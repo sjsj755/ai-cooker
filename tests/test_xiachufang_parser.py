@@ -6,7 +6,7 @@ from pathlib import Path
 import httpx
 import pytest
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.core.crawler import CrawledIngredient
 from app.crawlers.xiachufang import (
     PageParseError,
@@ -144,3 +144,73 @@ def test_mobile_fallback_on_anti_bot():
     recipe = asyncio.run(go())
     assert recipe.title == "牛油果生椰抹茶"
     assert recipe.source_url == "https://www.xiachufang.com/recipe/104100931/"
+
+
+def test_mobile_fallback_on_http_error():
+    recipe_html = _load("xiachufang_m_recipe.html")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url == "https://www.xiachufang.com/recipe/104100931/":
+            return httpx.Response(429, text="rate limited")
+        if url == "https://m.xiachufang.com/recipe/104100931/":
+            return httpx.Response(200, text=recipe_html)
+        return httpx.Response(404)
+
+    async def go():
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            crawler = XiaChuFangCrawler(
+                Settings(crawler_retry=1),
+                client=client,
+                delay=0,
+                robots=None,
+            )
+            return await crawler.parse_page(
+                "https://www.xiachufang.com/recipe/104100931/"
+            )
+
+    recipe = asyncio.run(go())
+    assert recipe.title == "牛油果生椰抹茶"
+    assert recipe.source_url == "https://www.xiachufang.com/recipe/104100931/"
+
+
+def test_mobile_empty_steps_filtered():
+    html = """
+    <html><body>
+      <h1 class="recipe-name">图片步骤菜</h1>
+      <section id="steps">
+        <div class="recipe-steps">
+          <div class="step"><div class="sub-title">步骤 1</div><p class="step-text"></p></div>
+          <div class="step"><div class="sub-title">步骤 2</div><p class="step-text">  </p></div>
+        </div>
+      </section>
+    </body></html>
+    """
+    recipe = _crawler().parse_recipe_html(
+        "https://m.xiachufang.com/recipe/107000001/",
+        html,
+    )
+    assert recipe.steps == []
+
+
+def test_mobile_empty_steps_ld_fallback():
+    html = """
+    <html><body>
+      <script type="application/ld+json">
+        {"@type":"Recipe","name":"图片步骤菜","recipeInstructions":"1.先切菜,2.下锅炒"}
+      </script>
+      <h1 class="recipe-name">图片步骤菜</h1>
+      <section id="steps">
+        <div class="recipe-steps">
+          <div class="step"><div class="sub-title">步骤 1</div><p class="step-text"></p></div>
+        </div>
+      </section>
+    </body></html>
+    """
+    recipe = _crawler().parse_recipe_html(
+        "https://m.xiachufang.com/recipe/107000002/",
+        html,
+    )
+    assert recipe.steps == [{"instruction": "先切菜", "minutes": None},
+                            {"instruction": "下锅炒", "minutes": None}]
